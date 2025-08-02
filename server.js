@@ -653,7 +653,7 @@ app.post('/create-order', async (req, res) => {
 });
 
 // update order status
-app.put('/admin/update-order-status', (req, res) => {
+app.put('/admin/update-order-status', async (req, res) => {
   const { id, status } = req.body;
 
   if (!id || !status) {
@@ -665,7 +665,6 @@ app.put('/admin/update-order-status', (req, res) => {
   }
 
   const allowedStatuses = ['pending', 'confirmed', 'shipped', 'delivered', 'cancelled'];
-
   if (!allowedStatuses.includes(status.toLowerCase())) {
     return res.status(400).json({
       status: 'error',
@@ -674,21 +673,16 @@ app.put('/admin/update-order-status', (req, res) => {
     });
   }
 
-  // Remove "ORD" prefix and pad if necessary
   const numericOrderId = parseInt(id.replace(/^ORD/, ''));
 
-  const sql = `UPDATE Orders SET status = ? WHERE order_id = ?`;
+  try {
+    const conn = await mysql2Promise.createConnection(banerjeeConfig);
+    const [result] = await conn.execute(
+      `UPDATE Orders SET status = ? WHERE order_id = ?`,
+      [status.toLowerCase(), numericOrderId]
+    );
 
-  banerjeeDB.query(sql, [status.toLowerCase(), numericOrderId], (err, result) => {
-    if (err) {
-      console.error(`[${new Date().toISOString()}] ❌ DB error while updating order status:`, err);
-      return res.status(500).json({
-        status: 'error',
-        message: 'Database error while updating order',
-        details: err.message,
-        timestamp: new Date().toISOString()
-      });
-    }
+    await conn.end();
 
     if (result.affectedRows === 0) {
       return res.status(404).json({
@@ -703,7 +697,15 @@ app.put('/admin/update-order-status', (req, res) => {
       message: `Order '${id}' status updated to '${status}'`,
       updatedAt: new Date().toISOString()
     });
-  });
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] ❌ DB error while updating order status:`, err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Database error while updating order',
+      details: err.message,
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
 
