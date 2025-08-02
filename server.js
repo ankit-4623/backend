@@ -652,6 +652,62 @@ app.post('/create-order', async (req, res) => {
     }
 });
 
+// update order status
+app.put('/admin/update-order-status', (req, res) => {
+  const { id, status } = req.body;
+
+  if (!id || !status) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'Order ID and new status are required',
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  const allowedStatuses = ['pending', 'confirmed', 'shipped', 'delivered', 'cancelled'];
+
+  if (!allowedStatuses.includes(status.toLowerCase())) {
+    return res.status(400).json({
+      status: 'error',
+      message: `Invalid status. Must be one of: ${allowedStatuses.join(', ')}`,
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  // Remove "ORD" prefix and pad if necessary
+  const numericOrderId = parseInt(id.replace(/^ORD/, ''));
+
+  const sql = `UPDATE Orders SET status = ? WHERE order_id = ?`;
+
+  banerjeeDB.query(sql, [status.toLowerCase(), numericOrderId], (err, result) => {
+    if (err) {
+      console.error(`[${new Date().toISOString()}] ❌ DB error while updating order status:`, err);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Database error while updating order',
+        details: err.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: `Order ID '${id}' not found`,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    res.json({
+      status: 'success',
+      message: `Order '${id}' status updated to '${status}'`,
+      updatedAt: new Date().toISOString()
+    });
+  });
+});
+
+
+
 app.post('/verify-payment', (req, res) => {
     try {
         const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
@@ -881,6 +937,10 @@ app.post('/api/upload-items', async (req, res) => {
         res.status(500).json({ success: false, message: 'Server error.' });
     }
 });
+
+
+
+
 
 // Course Management Routes (BECS DB)
 app.get('/api/courses', async (req, res, next) => {
