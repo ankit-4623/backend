@@ -364,7 +364,7 @@ app.post('/signup', async (req, res) => {
     }
 });
 
-app.post('/Customer-login', async (req, res) => {
+app.post('/login', async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) {
         console.log('❌ Missing email or password');
@@ -404,7 +404,7 @@ app.post('/Customer-login', async (req, res) => {
     }
 });
 
-app.post('/Admin-login', async (req, res) => {
+app.post('/admin-login', async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) {
         return res.status(400).json({ success: false, message: 'Email and password are required.' });
