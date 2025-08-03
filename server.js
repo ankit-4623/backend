@@ -886,6 +886,85 @@ app.get('/api/orders', async (req, res) => {
     }
 });
 
+// get customer order
+app.get('/customer/api/orders/:email', async (req, res) => {
+    try {
+        const customerEmail = req.params.email;
+        const conn = await mysql2Promise.createConnection(banerjeeConfig);
+        const query = `
+            SELECT 
+                o.order_id AS id, 
+                CONCAT(p.first_name, ' ', p.last_name) AS customer,
+                o.delivery_date AS date,
+                o.status,
+                o.email_id,
+                o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
+                o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
+            FROM Orders o
+            LEFT JOIN profiles p ON o.email_id = p.email_address
+            WHERE o.email_id = ?
+            ORDER BY o.order_id DESC
+        `;
+        const [results] = await conn.execute(query, [customerEmail]);
+
+        const formatted = await Promise.all(results.map(async (order) => {
+            const productIds = [
+                order.pid_1, order.pid_2, order.pid_3, order.pid_4, order.pid_5,
+                order.pid_6, order.pid_7, order.pid_8, order.pid_9, order.pid_10
+            ].filter(pid => pid);
+
+            let total_amount = 0;
+            for (const pid of productIds) {
+                const [itemId, quantity] = pid.split('-');
+                const [itemRows] = await conn.execute(
+                    `SELECT price FROM All_Items WHERE PID = ?`,
+                    [itemId]
+                );
+                if (itemRows.length > 0) {
+                    total_amount += (parseFloat(itemRows[0].price) || 0) * (parseInt(quantity) || 1);
+                }
+            }
+
+            const inferSource = () => {
+                for (let pid of productIds) {
+                    if (pid.startsWith('2')) return 'Electrical';
+                    if (pid.startsWith('1')) return 'Electronics';
+                }
+                return 'Unknown';
+            };
+
+            return {
+                id: `ORD${String(order.id).padStart(3, '0')}`,
+                customer: order.customer || 'Unknown',
+                date: order.date ? new Date(order.date).toISOString().split('T')[0] : '',
+                amount: total_amount.toFixed(2),
+                status: order.status || 'Pending',
+                source: inferSource(),
+                email_id: order.email_id || 'Unknown'
+            };
+        }));
+
+        await conn.end();
+
+        res.json({
+            status: 'success',
+            count: formatted.length,
+            orders: formatted,
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (err) {
+        console.error(`[${new Date().toISOString()}] ❌ Error fetching orders for ${req.params.email}:`, err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch orders',
+            details: err.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+
 // Shop Admin Item Upload Routes (Banerjee DB)
 app.post('/api/upload-items', async (req, res) => {
     const { type, items } = req.body;
