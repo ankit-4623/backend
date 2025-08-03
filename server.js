@@ -556,27 +556,49 @@ app.get('/api/stock', async (req, res) => {
     }
 });
 
-app.get('/api/electronics', (req, res) => {
+app.get('/api/electronics', verifyToken, (req, res) => {
     const sql = 'SELECT * FROM Electronics_Items';
     banerjeeDB.query(sql, (err, results) => {
         if (err) {
-            console.error('Error fetching Electronics_Items:', err);
-            return res.status(500).json({ error: 'Database error' });
+            console.error('Error fetching Electronics_Items:', {
+                error: err.message,
+                code: err.code,
+                sqlMessage: err.sqlMessage
+            });
+            return res.status(500).json({
+                error: 'Database error',
+                details: err.message
+            });
         }
-        const products = results.map(item => ({
-            id: item.PID,
-            name: item.name,
-            category: item.category,
-            price: item.price,
-            image: item.imglink,
-            description: item.description,
-            subcat: item.subcat,
-            source: 'Electronics'
-        }));
-        res.json(products);
+        if (!results || results.length === 0) {
+            console.log('No electronics items found');
+            return res.status(200).json([]);
+        }
+        try {
+            const products = results.map(item => {
+                if (!item.PID) throw new Error('Missing PID in database record');
+                return {
+                    id: item.PID,
+                    name: item.name || 'Unnamed Item',
+                    category: item.category || 'Uncategorized',
+                    price: parseFloat(item.price) || 0,
+                    image: item.imglink || 'https://via.placeholder.com/300x200.png?text=Item',
+                    description: item.description || 'No description available',
+                    subcat: item.subcat || 'None',
+                    source: 'Electronics'
+                };
+            });
+            console.log(`Fetched ${products.length} electronics items`);
+            res.json(products);
+        } catch (mapError) {
+            console.error('Error processing electronics items:', mapError);
+            res.status(500).json({
+                error: 'Error processing data',
+                details: mapError.message
+            });
+        }
     });
 });
-
 app.get('/api/electrical-items', async (req, res) => {
     try {
         const conn = await mysql2Promise.createConnection(banerjeeConfig);
