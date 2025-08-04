@@ -556,7 +556,7 @@ app.get('/api/stock', async (req, res) => {
     }
 });
 
-app.get('/api/electronics', verifyToken, (req, res) => {
+app.get('/api/electronics', (req, res) => {
     const sql = 'SELECT * FROM Electronics_Items';
     banerjeeDB.query(sql, (err, results) => {
         if (err) {
