@@ -1081,30 +1081,24 @@ app.get('/api/courses', async (req, res, next) => {
 
 app.get('/api/user/:uid/courses', async (req, res, next) => {
     const { uid } = req.params;
-    if (uid !== req.user.uid) {
-        console.warn(`❌ UID mismatch: requested(${uid}) vs authenticated(${req.user.uid})`);
+    if (!req.user || uid !== req.user.uid) {
         return res.status(403).json({ 
             error: 'Forbidden',
             message: 'You can only access your own courses',
             timestamp: new Date().toISOString()
         });
     }
+
     const maxRetries = 3;
-    let attempt = 1;
-    while (attempt <= maxRetries) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             const [results] = await becsPool.query(`
-                SELECT 
-                    c.course_id,
-                    c.course_name,
-                    c.course_description,
-                    c.price,
-                    c.image_link,
-                    pc.purchased_at
+                SELECT c.course_id, c.course_name, c.course_description, c.price, c.image_link, pc.purchased_at
                 FROM purchased_courses pc
                 JOIN courses c ON pc.course_id = c.course_id
                 WHERE pc.firebase_uid = ?
             `, [uid]);
+
             return res.json({ 
                 status: 'success',
                 count: results.length,
@@ -1112,14 +1106,10 @@ app.get('/api/user/:uid/courses', async (req, res, next) => {
                 timestamp: new Date().toISOString()
             });
         } catch (err) {
-            console.error(`❌ Attempt ${attempt} failed:`, err.message);
-            if (err.code === 'ECONNRESET' && attempt < maxRetries) {
-                console.log(`Retrying... (${attempt + 1}/${maxRetries})`);
-                attempt++;
-                await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+            if (['ECONNRESET', 'ETIMEDOUT'].includes(err.code) && attempt < maxRetries) {
+                await new Promise(r => setTimeout(r, 1000 * attempt));
                 continue;
             }
-            console.error('❌ Error fetching user courses:', err);
             return next(err);
         }
     }
@@ -1127,68 +1117,55 @@ app.get('/api/user/:uid/courses', async (req, res, next) => {
 
 
 
-app.post('/api/user/:uid/purchase-course',async (req, res, next) => {
 
+app.post('/api/user/:uid/purchase-course', async (req, res, next) => {
     const { uid } = req.params;
     const { course_id, razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
-    if (uid !== req.user.uid) {
-        console.warn(`[${new Date().toISOString()}] ❌ UID mismatch: requested(${uid}) vs authenticated(${req.user.uid})`);
+
+    if (!req.user || uid !== req.user.uid) {
         return res.status(403).json({
             error: 'Forbidden',
             message: 'You can only purchase courses for your own account',
             timestamp: new Date().toISOString()
         });
     }
+
     if (!course_id || !razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
-        console.warn(`[${new Date().toISOString()}] ❌ Missing required fields: course_id=${course_id}, payment_id=${razorpay_payment_id}, order_id=${razorpay_order_id}, signature=${razorpay_signature}`);
         return res.status(400).json({
             error: 'Bad Request',
-            message: 'Course ID, razorpay_payment_id, razorpay_order_id, and razorpay_signature are required',
+            message: 'All payment fields are required',
             timestamp: new Date().toISOString()
         });
     }
+
     try {
         const generatedSignature = crypto
             .createHmac('sha256', RAZORPAY_KEY_SECRET)
             .update(`${razorpay_order_id}|${razorpay_payment_id}`)
             .digest('hex');
+
         if (generatedSignature !== razorpay_signature) {
-            console.warn(`[${new Date().toISOString()}] ❌ Payment verification failed for order: ${razorpay_order_id}`);
-            return res.status(400).json({
-                status: 'error',
-                message: 'Invalid payment signature',
-                timestamp: new Date().toISOString()
-            });
+            return res.status(400).json({ status: 'error', message: 'Invalid payment signature', timestamp: new Date().toISOString() });
         }
-        const [courseResults] = await becsPool.query(
-            `SELECT course_id, price FROM courses WHERE course_id = ?`,
-            [course_id]
-        );
-        if (courseResults.length === 0) {
-            console.warn(`[${new Date().toISOString()}] ❌ Course ${course_id} not found`);
-            return res.status(404).json({
-                error: 'Not Found',
-                message: 'Course not found',
-                timestamp: new Date().toISOString()
-            });
+
+        const [courseResults] = await becsPool.query(`SELECT course_id, price FROM courses WHERE course_id = ?`, [course_id]);
+        if (!courseResults.length) {
+            return res.status(404).json({ error: 'Not Found', message: 'Course not found', timestamp: new Date().toISOString() });
         }
+
         const [existingPurchase] = await becsPool.query(
             `SELECT course_id FROM purchased_courses WHERE firebase_uid = ? AND course_id = ?`,
             [uid, course_id]
         );
-        if (existingPurchase.length > 0) {
-            console.warn(`[${new Date().toISOString()}] ❌ Course ${course_id} already purchased by user ${uid}`);
-            return res.status(400).json({
-                error: 'Bad Request',
-                message: 'Course already purchased',
-                timestamp: new Date().toISOString()
-            });
+        if (existingPurchase.length) {
+            return res.status(400).json({ error: 'Bad Request', message: 'Course already purchased', timestamp: new Date().toISOString() });
         }
-        const [result] = await becsPool.query(
-            `INSERT INTO purchased_courses (firebase_uid, course_id, purchased_at)
-             VALUES (?, ?, NOW())`,
+
+        await becsPool.query(
+            `INSERT INTO purchased_courses (firebase_uid, course_id, purchased_at) VALUES (?, ?, NOW())`,
             [uid, course_id]
         );
+
         res.json({
             status: 'success',
             message: 'Course purchased successfully',
@@ -1196,60 +1173,49 @@ app.post('/api/user/:uid/purchase-course',async (req, res, next) => {
             timestamp: new Date().toISOString()
         });
     } catch (err) {
-        console.error(`[${new Date().toISOString()}] ❌ Error processing course purchase:`, err);
         if (err.code === 'ER_NO_REFERENCED_ROW_2') {
-            console.warn(`[${new Date().toISOString()}] ❌ Invalid course ID: ${course_id}`);
-            return res.status(400).json({
-                status: 'error',
-                message: 'Invalid course ID',
-                timestamp: new Date().toISOString()
-            });
+            return res.status(400).json({ status: 'error', message: 'Invalid course ID', timestamp: new Date().toISOString() });
         }
         next(err);
     }
 });
 
-app.get('/api/courses/:courseId/lectures',  async (req, res, next) => {
+
+app.get('/api/courses/:courseId/lectures', async (req, res, next) => {
     const { courseId } = req.params;
-    const maxRetries = 3;
-    let attempt = 1;
-    if (!courseId || isNaN(courseId) || parseInt(courseId) <= 0) {
-        console.warn(`❌ Invalid courseId: ${courseId}`);
-        return res.status(400).json({
-            status: 'error',
-            message: 'Invalid course ID. Must be a positive integer.',
-            timestamp: new Date().toISOString()
-        });
+    const uid = req.user?.uid;
+
+    if (!uid) {
+        return res.status(401).json({ status: 'error', message: 'Unauthorized', timestamp: new Date().toISOString() });
     }
-    while (attempt <= maxRetries) {
+
+    if (!courseId || isNaN(courseId) || parseInt(courseId) <= 0) {
+        return res.status(400).json({ status: 'error', message: 'Invalid course ID. Must be a positive integer.', timestamp: new Date().toISOString() });
+    }
+
+    const maxRetries = 3;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             const [courseExists] = await becsPool.query('SELECT course_id, course_name FROM courses WHERE course_id = ?', [courseId]);
-            if (courseExists.length === 0) {
-                console.warn(`❌ Course ${courseId} not found`);
-                return res.status(404).json({
-                    status: 'error',
-                    message: `Course with ID ${courseId} not found`,
-                    timestamp: new Date().toISOString()
-                });
+            if (!courseExists.length) {
+                return res.status(404).json({ status: 'error', message: `Course with ID ${courseId} not found`, timestamp: new Date().toISOString() });
             }
+
             const [purchaseExists] = await becsPool.query(
                 'SELECT course_id FROM purchased_courses WHERE firebase_uid = ? AND course_id = ?',
-                [req.user.uid, courseId]
+                [uid, courseId]
             );
-            if (purchaseExists.length === 0) {
-                console.warn(`❌ User ${req.user.uid} has not purchased course ${courseId}`);
-                return res.status(403).json({
-                    status: 'error',
-                    message: 'You have not purchased this course',
-                    timestamp: new Date().toISOString()
-                });
+            if (!purchaseExists.length) {
+                return res.status(403).json({ status: 'error', message: 'You have not purchased this course', timestamp: new Date().toISOString() });
             }
+
             const [results] = await becsPool.query(`
                 SELECT lecture_id, course_id, video_name, video_link, duration_minutes
                 FROM lectures
                 WHERE course_id = ?
                 ORDER BY lecture_id ASC
             `, [courseId]);
+
             return res.json({
                 status: 'success',
                 count: results.length,
@@ -1258,33 +1224,22 @@ app.get('/api/courses/:courseId/lectures',  async (req, res, next) => {
                 timestamp: new Date().toISOString()
             });
         } catch (err) {
-            console.error(`❌ Attempt ${attempt} failed: Error fetching lectures for course ${courseId}:`, err);
-            if ((err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.code === 'PROTOCOL_CONNECTION_LOST') && attempt < maxRetries) {
-                console.log(`Retrying... (${attempt + 1}/${maxRetries})`);
-                attempt++;
-                await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+            if (['ECONNRESET', 'ETIMEDOUT', 'PROTOCOL_CONNECTION_LOST'].includes(err.code) && attempt < maxRetries) {
+                await new Promise(r => setTimeout(r, 1000 * attempt));
                 continue;
             }
-            console.error('❌ Error fetching lectures:', err);
-            if (err.code === 'PROTOCOL_SEQUENCE_TIMEOUT') {
-                return res.status(504).json({
-                    status: 'error',
-                    message: 'Database query timed out',
-                    error: err.message,
-                    timestamp: new Date().toISOString()
-                });
-            } else if (err.code === 'ETIMEDOUT' || err.code === 'PROTOCOL_CONNECTION_LOST') {
-                return res.status(503).json({
-                    status: 'error',
-                    message: 'Database connection timed out',
-                    error: err.message,
-                    timestamp: new Date().toISOString()
-                });
-            }
-            return next(err);
+
+            const statusCode = err.code === 'PROTOCOL_SEQUENCE_TIMEOUT' ? 504 : 503;
+            return res.status(statusCode).json({
+                status: 'error',
+                message: 'Database error occurred',
+                error: err.message,
+                timestamp: new Date().toISOString()
+            });
         }
     }
 });
+
 
 // Teacher Panel Endpoints (BECS DB)
 app.post('/api/teacher/login', async (req, res, next) => {
