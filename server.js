@@ -1079,7 +1079,7 @@ app.get('/api/courses', async (req, res, next) => {
     }
 });
 
-app.get('/api/user/:uid/courses', authenticateFirebaseToken, async (req, res, next) => {
+app.get('/api/user/:uid/courses', async (req, res, next) => {
     const { uid } = req.params;
     if (uid !== req.user.uid) {
         console.warn(`❌ UID mismatch: requested(${uid}) vs authenticated(${req.user.uid})`);
@@ -1209,7 +1209,7 @@ app.post('/api/user/:uid/purchase-course',async (req, res, next) => {
     }
 });
 
-app.get('/api/courses/:courseId/lectures', authenticateFirebaseToken, async (req, res, next) => {
+app.get('/api/courses/:courseId/lectures',  async (req, res, next) => {
     const { courseId } = req.params;
     const maxRetries = 3;
     let attempt = 1;
