@@ -1,4 +1,5 @@
 
+
 const express = require('express');
 const mysql = require('mysql2');
 const mysql2Promise = require('mysql2/promise');
@@ -1117,7 +1118,7 @@ app.get('/api/user/:uid/courses', async (req, res, next) => {
 });
 
 
-app.post('/api/create-order', verifyToken, async (req, res) => {
+app.post('/api/create-order', async (req, res) => {
   try {
     const { amount, currency } = req.body;
 
