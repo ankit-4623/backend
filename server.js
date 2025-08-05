@@ -1081,6 +1081,7 @@ app.get('/api/courses', async (req, res, next) => {
 
 app.get('/api/user/:uid/courses', async (req, res, next) => {
     const { uid } = req.params;
+    console.log(uid)
     if (!req.user || uid !== req.user.uid) {
         return res.status(403).json({ 
             error: 'Forbidden',
@@ -1116,8 +1117,31 @@ app.get('/api/user/:uid/courses', async (req, res, next) => {
 });
 
 
+app.post('/api/create-order', verifyToken, async (req, res) => {
+  try {
+    const { amount, currency } = req.body;
 
+    const options = {
+      amount: amount,
+      currency: currency,
+      receipt: Date.now()
+    };
 
+    const order = await razorpay.orders.create(options);
+    res.json({
+      status: 'success',
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      key_id: process.env.RAZORPAY_KEY_ID
+    });
+  } catch (error) {
+    console.error('Create order error:', error);
+    res.status(500).json({ status: 'error', message: 'Failed to create order' });
+  }
+});
+
+// Route to verify and complete purchase
 app.post('/api/user/:uid/purchase-course', async (req, res, next) => {
     const { uid } = req.params;
     const { course_id, razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
