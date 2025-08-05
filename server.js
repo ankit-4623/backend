@@ -1117,29 +1117,63 @@ app.get('/api/user/:uid/courses', async (req, res, next) => {
 });
 
 
-app.post('/api/create-order', verifyToken, async (req, res) => {
-  try {
+app.post('/api/create-order', async (req, res) => {
     const { amount, currency } = req.body;
 
-    const options = {
-      amount: amount,
-      currency: currency,
-      receipt: Date.now()
-    };
+    if (!amount || !currency) {
+        console.warn(`[${new Date().toISOString()}] ❌ Missing amount or currency`);
+        return res.status(400).json({
+            status: 'error',
+            message: 'Amount and currency are required',
+            timestamp: new Date().toISOString()
+        });
+    }
 
-    const order = await razorpay.orders.create(options);
-    res.json({
-      status: 'success',
-      orderId: order.id,
-      amount: order.amount,
-      currency: order.currency,
-      key_id: process.env.RAZORPAY_KEY_ID
-    });
-  } catch (error) {
-    console.error('Create order error:', error);
-    res.status(500).json({ status: 'error', message: 'Failed to create order' });
-  }
+    const numericAmount = Number(amount);
+    if (isNaN(numericAmount) || numericAmount <= 0) {
+        console.warn(`[${new Date().toISOString()}] ❌ Invalid amount: ${amount}`);
+        return res.status(400).json({
+            status: 'error',
+            message: 'Amount must be a positive number',
+            timestamp: new Date().toISOString()
+        });
+    }
+
+    if (currency !== 'INR') {
+        console.warn(`[${new Date().toISOString()}] ❌ Unsupported currency: ${currency}`);
+        return res.status(400).json({
+            status: 'error',
+            message: 'Only INR currency is supported',
+            timestamp: new Date().toISOString()
+        });
+    }
+
+    try {
+        const order = await razorpay.orders.create({
+            amount: Math.round(numericAmount * 100), // Razorpay expects amount in paise
+            currency: 'INR',
+            receipt: 'receipt_' + Date.now().toString(), // Ensure string
+            payment_capture: 1
+        });
+
+        return res.status(200).json({
+            status: 'success',
+            orderId: order.id,
+            amount: order.amount,
+            currency: order.currency,
+            timestamp: new Date().toISOString()
+        });
+    } catch (err) {
+        console.error(`[${new Date().toISOString()}] ❌ Error creating Razorpay order:`, err);
+        return res.status(500).json({
+            status: 'error',
+            message: 'Failed to create Razorpay order',
+            details: err.error || err.message,
+            timestamp: new Date().toISOString()
+        });
+    }
 });
+
 
 // Route to verify and complete purchase
 app.post('/api/user/:uid/purchase-course', async (req, res, next) => {
