@@ -1079,9 +1079,9 @@ app.get('/api/courses', async (req, res, next) => {
     }
 });
 
-app.get('/api/user/:uid/courses', async (req, res, next) => {
+app.get('/api/user/:uid/courses', authenticateFirebaseToken, async (req, res, next) => {
     const { uid } = req.params;
-    console.log(uid)
+
     if (!req.user || uid !== req.user.uid) {
         return res.status(403).json({ 
             error: 'Forbidden',
@@ -1117,7 +1117,8 @@ app.get('/api/user/:uid/courses', async (req, res, next) => {
 });
 
 
-app.post('/api/create-order', async (req, res) => {
+
+app.post('/api/create-order', authenticateFirebaseToken, async (req, res) => {
     const { amount, currency } = req.body;
 
     if (!amount || !currency) {
@@ -1150,9 +1151,9 @@ app.post('/api/create-order', async (req, res) => {
 
     try {
         const order = await razorpay.orders.create({
-            amount: Math.round(numericAmount * 100), // Razorpay expects amount in paise
+            amount: Math.round(numericAmount * 100),
             currency: 'INR',
-            receipt: 'receipt_' + Date.now().toString(), // Ensure string
+            receipt: `receipt_${req.user?.uid || 'anon'}_${Date.now()}`,
             payment_capture: 1
         });
 
@@ -1164,7 +1165,7 @@ app.post('/api/create-order', async (req, res) => {
             timestamp: new Date().toISOString()
         });
     } catch (err) {
-        console.error(`[${new Date().toISOString()}] ❌ Error creating Razorpay order:`, err);
+        console.error(`[${new Date().toISOString()}] ❌ Razorpay error:`, err);
         return res.status(500).json({
             status: 'error',
             message: 'Failed to create Razorpay order',
@@ -1176,7 +1177,7 @@ app.post('/api/create-order', async (req, res) => {
 
 
 // Route to verify and complete purchase
-app.post('/api/user/:uid/purchase-course', async (req, res, next) => {
+app.post('/api/user/:uid/purchase-course', authenticateFirebaseToken, async (req, res, next) => {
     const { uid } = req.params;
     const { course_id, razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
 
@@ -1203,12 +1204,20 @@ app.post('/api/user/:uid/purchase-course', async (req, res, next) => {
             .digest('hex');
 
         if (generatedSignature !== razorpay_signature) {
-            return res.status(400).json({ status: 'error', message: 'Invalid payment signature', timestamp: new Date().toISOString() });
+            return res.status(400).json({
+                status: 'error',
+                message: 'Invalid payment signature',
+                timestamp: new Date().toISOString()
+            });
         }
 
         const [courseResults] = await becsPool.query(`SELECT course_id, price FROM courses WHERE course_id = ?`, [course_id]);
         if (!courseResults.length) {
-            return res.status(404).json({ error: 'Not Found', message: 'Course not found', timestamp: new Date().toISOString() });
+            return res.status(404).json({
+                error: 'Not Found',
+                message: 'Course not found',
+                timestamp: new Date().toISOString()
+            });
         }
 
         const [existingPurchase] = await becsPool.query(
@@ -1216,7 +1225,11 @@ app.post('/api/user/:uid/purchase-course', async (req, res, next) => {
             [uid, course_id]
         );
         if (existingPurchase.length) {
-            return res.status(400).json({ error: 'Bad Request', message: 'Course already purchased', timestamp: new Date().toISOString() });
+            return res.status(400).json({
+                error: 'Bad Request',
+                message: 'Course already purchased',
+                timestamp: new Date().toISOString()
+            });
         }
 
         await becsPool.query(
@@ -1224,7 +1237,7 @@ app.post('/api/user/:uid/purchase-course', async (req, res, next) => {
             [uid, course_id]
         );
 
-        res.json({
+        return res.json({
             status: 'success',
             message: 'Course purchased successfully',
             course_id,
@@ -1232,37 +1245,48 @@ app.post('/api/user/:uid/purchase-course', async (req, res, next) => {
         });
     } catch (err) {
         if (err.code === 'ER_NO_REFERENCED_ROW_2') {
-            return res.status(400).json({ status: 'error', message: 'Invalid course ID', timestamp: new Date().toISOString() });
+            return res.status(400).json({
+                status: 'error',
+                message: 'Invalid course ID',
+                timestamp: new Date().toISOString()
+            });
         }
         next(err);
     }
 });
 
 
-app.get('/api/courses/:courseId/lectures', async (req, res, next) => {
+
+app.get('/api/courses/:courseId/lectures', authenticateFirebaseToken, async (req, res, next) => {
     const { courseId } = req.params;
     const uid = req.user?.uid;
 
+    const numericCourseId = parseInt(courseId, 10);
     if (!uid) {
         return res.status(401).json({ status: 'error', message: 'Unauthorized', timestamp: new Date().toISOString() });
     }
 
-    if (!courseId || isNaN(courseId) || parseInt(courseId) <= 0) {
+    if (isNaN(numericCourseId) || numericCourseId <= 0) {
         return res.status(400).json({ status: 'error', message: 'Invalid course ID. Must be a positive integer.', timestamp: new Date().toISOString() });
     }
 
     const maxRetries = 3;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-            const [courseExists] = await becsPool.query('SELECT course_id, course_name FROM courses WHERE course_id = ?', [courseId]);
+            const [courseExists] = await becsPool.query(
+                'SELECT course_id, course_name FROM courses WHERE course_id = ?', 
+                [numericCourseId]
+            );
+
             if (!courseExists.length) {
-                return res.status(404).json({ status: 'error', message: `Course with ID ${courseId} not found`, timestamp: new Date().toISOString() });
+                return res.status(404).json({ status: 'error', message: `Course with ID ${numericCourseId} not found`, timestamp: new Date().toISOString() });
             }
 
             const [purchaseExists] = await becsPool.query(
                 'SELECT course_id FROM purchased_courses WHERE firebase_uid = ? AND course_id = ?',
-                [uid, courseId]
+                [uid, numericCourseId]
             );
+
             if (!purchaseExists.length) {
                 return res.status(403).json({ status: 'error', message: 'You have not purchased this course', timestamp: new Date().toISOString() });
             }
@@ -1272,7 +1296,7 @@ app.get('/api/courses/:courseId/lectures', async (req, res, next) => {
                 FROM lectures
                 WHERE course_id = ?
                 ORDER BY lecture_id ASC
-            `, [courseId]);
+            `, [numericCourseId]);
 
             return res.json({
                 status: 'success',
@@ -1287,8 +1311,7 @@ app.get('/api/courses/:courseId/lectures', async (req, res, next) => {
                 continue;
             }
 
-            const statusCode = err.code === 'PROTOCOL_SEQUENCE_TIMEOUT' ? 504 : 503;
-            return res.status(statusCode).json({
+            return res.status(503).json({
                 status: 'error',
                 message: 'Database error occurred',
                 error: err.message,
@@ -1297,6 +1320,7 @@ app.get('/api/courses/:courseId/lectures', async (req, res, next) => {
         }
     }
 });
+
 
 
 // Teacher Panel Endpoints (BECS DB)
