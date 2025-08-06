@@ -1222,7 +1222,7 @@ app.post('/verify-payment', (req, res) => {
     }
 });
 // Route to verify and complete purchase
-app.post('/api/user/:uid/purchase-course', authenticateFirebaseToken, async (req, res, next) => {
+app.post('/api/user/:uid/purchase-course', async (req, res, next) => {
     const { uid } = req.params;
     const { course_id, razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
 
@@ -1302,7 +1302,7 @@ app.post('/api/user/:uid/purchase-course', authenticateFirebaseToken, async (req
 
 
 
-app.get('/api/courses/:courseId/lectures', authenticateFirebaseToken, async (req, res, next) => {
+app.get('/api/courses/:courseId/lectures', async (req, res, next) => {
     const { courseId } = req.params;
     const uid = req.user?.uid;
 
