@@ -1118,7 +1118,7 @@ app.get('/api/user/:uid/courses', authenticateFirebaseToken, async (req, res, ne
 
 
 
-app.post('/api/create-order', authenticateFirebaseToken, async (req, res) => {
+app.post('/api/create-order', async (req, res) => {
     const { amount, currency } = req.body;
 
     if (!amount || !currency) {
