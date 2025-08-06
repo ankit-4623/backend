@@ -1118,110 +1118,112 @@ app.get('/api/user/:uid/courses', authenticateFirebaseToken, async (req, res, ne
 
 
 
-app.post('/api/create-order', async (req, res) => {
-    const { key, amount, currency, name, description, image } = req.body;
+// app.post('/api/create-order', async (req, res) => {
+//     const { key, amount, currency, name, description, image } = req.body;
 
-    // Validate required fields
-    if (!amount || !currency || !name || !description || !image) {
-        console.warn(`[${new Date().toISOString()}] ❌ Missing required fields in /create-order`);
-        return res.status(400).json({
-            status: 'error',
-            message: 'amount, currency, name, description, and image are required',
-            timestamp: new Date().toISOString()
-        });
-    }
+//     // Validate required fields
+//     if (!amount || !currency || !name || !description || !image) {
+//         console.warn(`[${new Date().toISOString()}] ❌ Missing required fields in /create-order`);
+//         return res.status(400).json({
+//             status: 'error',
+//             message: 'amount, currency, name, description, and image are required',
+//             timestamp: new Date().toISOString()
+//         });
+//     }
 
-    if (isNaN(amount) || amount <= 0) {
-        console.warn(`[${new Date().toISOString()}] ❌ Invalid amount: ${amount}`);
-        return res.status(400).json({
-            status: 'error',
-            message: 'Amount must be a positive number',
-            timestamp: new Date().toISOString()
-        });
-    }
+//     if (isNaN(amount) || amount <= 0) {
+//         console.warn(`[${new Date().toISOString()}] ❌ Invalid amount: ${amount}`);
+//         return res.status(400).json({
+//             status: 'error',
+//             message: 'Amount must be a positive number',
+//             timestamp: new Date().toISOString()
+//         });
+//     }
 
-    if (currency !== 'INR') {
-        console.warn(`[${new Date().toISOString()}] ❌ Unsupported currency: ${currency}`);
-        return res.status(400).json({
-            status: 'error',
-            message: 'Only INR currency is supported',
-            timestamp: new Date().toISOString()
-        });
-    }
+//     if (currency !== 'INR') {
+//         console.warn(`[${new Date().toISOString()}] ❌ Unsupported currency: ${currency}`);
+//         return res.status(400).json({
+//             status: 'error',
+//             message: 'Only INR currency is supported',
+//             timestamp: new Date().toISOString()
+//         });
+//     }
 
-    try {
-        const order = await razorpay.orders.create({
-            amount: Math.round(amount),
-            currency: 'INR',
-            receipt: `receipt_${Date.now()}`,
-            payment_capture: 1
-        });
+//     try {
+//         const order = await razorpay.orders.create({
+//             amount: Math.round(amount),
+//             currency: 'INR',
+//             receipt: `receipt_${Date.now()}`,
+//             payment_capture: 1
+//         });
 
-        return res.json({
-            status: 'success',
-            orderId: order.id,
-            amount: order.amount,
-            currency: order.currency,
-            name,
-            description,
-            image,
-            timestamp: new Date().toISOString()
-        });
+//         return res.json({
+//             status: 'success',
+//             orderId: order.id,
+//             amount: order.amount,
+//             currency: order.currency,
+//             name,
+//             description,
+//             image,
+//             timestamp: new Date().toISOString()
+//         });
 
-    } catch (err) {
-        console.error(`[${new Date().toISOString()}] ❌ Error creating Razorpay order:`, err);
-        return res.status(500).json({
-            status: 'error',
-            message: 'Failed to create order',
-            details: err.message,
-            timestamp: new Date().toISOString()
-        });
-    }
-});
+//     } catch (err) {
+//         console.error(`[${new Date().toISOString()}] ❌ Error creating Razorpay order:`, err);
+//         return res.status(500).json({
+//             status: 'error',
+//             message: 'Failed to create order',
+//             details: err.message,
+//             timestamp: new Date().toISOString()
+//         });
+//     }
+// });
 
 
-app.post('/verify-payment', (req, res) => {
-    try {
-        const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
-        if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
-            console.warn(`[${new Date().toISOString()}] ❌ Missing payment details in /verify-payment request`);
-            return res.status(400).json({
-                status: 'error',
-                message: 'razorpay_payment_id, razorpay_order_id, and razorpay_signature are required',
-                timestamp: new Date().toISOString()
-            });
-        }
-        const payload = `${razorpay_order_id}|${razorpay_payment_id}`;
-        const expectedSignature = crypto
-            .createHmac('sha256', RAZORPAY_KEY_SECRET)
-            .update(payload)
-            .digest('hex');
-        if (expectedSignature === razorpay_signature) {
-            return res.json({
-                status: 'success',
-                verified: true,
-                message: 'Payment verified successfully',
-                timestamp: new Date().toISOString()
-            });
-        } else {
-            console.warn(`[${new Date().toISOString()}] ❌ Payment verification failed: Invalid signature`);
-            return res.status(400).json({
-                status: 'error',
-                verified: false,
-                message: 'Invalid payment signature',
-                timestamp: new Date().toISOString()
-            });
-        }
-    } catch (error) {
-        console.error(`[${new Date().toISOString()}] ❌ Verification error:`, error.message);
-        return res.status(500).json({
-            status: 'error',
-            message: `Server error: ${error.message}`,
-            timestamp: new Date().toISOString()
-        });
-    }
-});
+// app.post('/verify-payment', (req, res) => {
+//     try {
+//         const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
+//         if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
+//             console.warn(`[${new Date().toISOString()}] ❌ Missing payment details in /verify-payment request`);
+//             return res.status(400).json({
+//                 status: 'error',
+//                 message: 'razorpay_payment_id, razorpay_order_id, and razorpay_signature are required',
+//                 timestamp: new Date().toISOString()
+//             });
+//         }
+//         const payload = `${razorpay_order_id}|${razorpay_payment_id}`;
+//         const expectedSignature = crypto
+//             .createHmac('sha256', RAZORPAY_KEY_SECRET)
+//             .update(payload)
+//             .digest('hex');
+//         if (expectedSignature === razorpay_signature) {
+//             return res.json({
+//                 status: 'success',
+//                 verified: true,
+//                 message: 'Payment verified successfully',
+//                 timestamp: new Date().toISOString()
+//             });
+//         } else {
+//             console.warn(`[${new Date().toISOString()}] ❌ Payment verification failed: Invalid signature`);
+//             return res.status(400).json({
+//                 status: 'error',
+//                 verified: false,
+//                 message: 'Invalid payment signature',
+//                 timestamp: new Date().toISOString()
+//             });
+//         }
+//     } catch (error) {
+//         console.error(`[${new Date().toISOString()}] ❌ Verification error:`, error.message);
+//         return res.status(500).json({
+//             status: 'error',
+//             message: `Server error: ${error.message}`,
+//             timestamp: new Date().toISOString()
+//         });
+//     }
+// });
 // Route to verify and complete purchase
+
+
 app.post('/api/user/:uid/purchase-course', async (req, res, next) => {
     const { uid } = req.params;
     const { course_id, razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
