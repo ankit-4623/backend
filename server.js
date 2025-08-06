@@ -98,7 +98,7 @@ becsPool.getConnection()
 
 // Firebase Admin Initialization
 try {
-    const serviceAccount = require('./INSTITUTE/student login/firebase-service-account.json');
+    const serviceAccount = require('./firebase-service-account.json');
     admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
         databaseURL: process.env.FIREBASE_DATABASE_URL || "becs-133d8.firebaseapp.com"
