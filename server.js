@@ -26,7 +26,7 @@ const RAZORPAY_KEY_SECRET = 'tpQkW35efUkcLHyMxNSOMJTf';
 
 // Middleware
 app.use(cors({
-    origin: ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:3001', 'http://127.0.0.1:3001','https://becsserver-8ws3ghone-tathagatas-projects.vercel.app'],
+    origin: ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:3001', 'http://127.0.0.1:3001','https://banerjeeelectronicsconsultancyservices.com'],
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     credentials: true
 }));
