@@ -256,8 +256,8 @@ app.use('/signup', authLimiter);
 app.use('/admin-login', authLimiter);
 app.use('/api/teacher/login', authLimiter);
 app.use('/api/', apiLimiter);
-app.use('/verify-payment', paymentLimiter);
-app.use('/submit-order', paymentLimiter);
+app.use('/verify-payment');
+app.use('/submit-order');
 
 // Main Routes
 app.get('/', (req, res) => {
@@ -1118,7 +1118,7 @@ app.get('/api/user/:uid/courses', authenticateFirebaseToken, async (req, res, ne
 
 
 
-app.post('/api/create-order', async (req, res) => {
+app.post('/api/create-order',authenticateFirebaseToken, async (req, res) => {
     const { key, amount, currency, name, description, image } = req.body;
 
     // Validate required fields
