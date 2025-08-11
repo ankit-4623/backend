@@ -252,8 +252,8 @@ const paymentLimiter = rateLimit({
     legacyHeaders: false,
 });
 
-app.use('/login', authLimiter);
-app.use('/signup', authLimiter);
+// app.use('/login', authLimiter);
+// app.use('/signup', authLimiter);
 app.use('/admin-login', authLimiter);
 app.use('/api/teacher/login', authLimiter);
 app.use('/api/', apiLimiter);
