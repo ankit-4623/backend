@@ -28,7 +28,7 @@ const RAZORPAY_KEY_SECRET = 'tpQkW35efUkcLHyMxNSOMJTf';
 app.use(cors({
   origin: [
     'https://banerjeeelectronicsconsultancyservices.com',
-    'https://www.banerjeeelectronicsconsultancyservices.com'
+    'https://www.banerjeeelectronicsconsultancyservices.com',
     'http://localhost:3000', 
     'http://127.0.0.1:3000'
   ],
