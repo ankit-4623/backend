@@ -371,7 +371,7 @@ app.post('/signup', async (req, res) => {
         res.status(500).json({ error: 'Database error' });
     }
 });
-
+// login
 app.post('/login', async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) {
