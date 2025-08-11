@@ -36,7 +36,7 @@ app.use(cors({
 }));
 
 // Handle preflight requests globally
-app.options('*', cors());
+// app.options('*', cors());
 
 app.use(timeout('15s'));
 app.use(express.json());
