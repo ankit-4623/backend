@@ -996,7 +996,7 @@ app.post('/api/upload-items', async (req, res) => {
                 : type === 'electrical' ? '2'
                 : null;
 
-    if (!targetTable  !prefix) {
+    if (!targetTable || !prefix) {
         return res.status(400).json({ success: false, message: 'Invalid type.' });
     }
 
@@ -1015,12 +1015,12 @@ app.post('/api/upload-items', async (req, res) => {
                  VALUES (?, ?, ?, ?, ?, ?, ?)`,
                 [
                     pid,
-                    item.name  '',
-                    item.category  '',
-                    item.price  0,
-                    item.imglink  '',
-                    item.description  '',
-                    item.subcat  ''
+                    item.name || '',
+                    item.category || '',
+                    item.price || 0,
+                    item.imglink || '',
+                    item.description || '',
+                    item.subcat || ''
                 ]
             );
 
@@ -1029,11 +1029,11 @@ app.post('/api/upload-items', async (req, res) => {
                  VALUES (?, ?, ?, ?, ?, ?, ?)`,
                 [
                     pid,
-                    item.name  '',
-                    item.category  '',
-                    item.price  0,
-                    item.imglink  '',
-                    item.description  '',
+                    item.name || '',
+                    item.category || '',
+                    item.price || 0,
+                    item.imglink || '',
+                    item.description || '',
                     item.subcat || ''
                 ]
             );
