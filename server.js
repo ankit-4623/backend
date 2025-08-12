@@ -984,7 +984,7 @@ app.post('/api/upload-items', async (req, res) => {
     const { type, items } = req.body;
 
     // Validate inputs
-    if (!type  !items  !Array.isArray(items)) {
+    if (!type || !items || !Array.isArray(items)) {
         return res.status(400).json({ success: false, message: 'Missing type or items array.' });
     }
 
