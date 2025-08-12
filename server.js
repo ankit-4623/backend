@@ -52,7 +52,7 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
     if (req.body && Object.keys(req.body).length > 0) {
-        console.log('Request Body:', JSON.stringify(req.body, null, 2));
+        // console.log('Request Body:', JSON.stringify(req.body, null, 2));
     }
     next();
 });
@@ -377,7 +377,7 @@ app.post('/signup', async (req, res) => {
 app.post('/login', async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) {
-        console.log('❌ Missing email or password');
+        // console.log('❌ Missing email or password');
         return res.status(400).json({
             status: 'error',
             message: 'Email and Password are required.'
@@ -391,12 +391,12 @@ app.post('/login', async (req, res) => {
         );
         await connection.end();
         if (rows.length === 0) {
-            console.log('⚠️ Email not found');
+            // console.log('⚠️ Email not found');
             return res.status(200).json({ status: 'not_found' });
         }
         const user = rows[0];
         if (user.password !== password) {
-            console.log('❌ Incorrect password');
+            // console.log('❌ Incorrect password');
             return res.status(200).json({ status: 'wrong_password' });
         }
         return res.status(200).json({
