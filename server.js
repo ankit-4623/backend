@@ -41,7 +41,7 @@ app.use(cors({
 // app.options('*', cors());
 
 app.use(timeout('15s'));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 app.use(bodyParser.json());
 app.use(morgan('dev'));
 app.use((req, res, next) => {
