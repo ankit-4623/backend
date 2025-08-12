@@ -979,59 +979,78 @@ app.get('/customer/api/orders/:email', async (req, res) => {
 
 
 // Shop Admin Item Upload Routes (Banerjee DB)
+
 app.post('/api/upload-items', async (req, res) => {
     const { type, items } = req.body;
-    if (!type || !items || !Array.isArray(items)) {
+
+    // Validate inputs
+    if (!type  !items  !Array.isArray(items)) {
         return res.status(400).json({ success: false, message: 'Missing type or items array.' });
     }
+
+    // Decide target table and prefix
     const targetTable = type === 'electronics' ? 'Electronics_Items'
                     : type === 'electrical' ? 'Electrical_Items'
                     : null;
     const prefix = type === 'electronics' ? '1'
                 : type === 'electrical' ? '2'
                 : null;
-    if (!targetTable || !prefix) {
+
+    if (!targetTable  !prefix) {
         return res.status(400).json({ success: false, message: 'Invalid type.' });
     }
+
     try {
         const conn = await mysql2Promise.createConnection(banerjeeConfig);
+
+        // Clear old data
         await conn.execute(`DELETE FROM ${targetTable}`);
+
+        // Insert new items
         for (const item of items) {
             const pid = await getNextPID(conn, targetTable, prefix);
+
             await conn.execute(
                 `INSERT INTO ${targetTable} (PID, name, category, price, imglink, description, subcat)
-                VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
                 [
                     pid,
-                    item.name || '',
-                    item.category || '',
-                    item.price || 0,
-                    item.imglink || '',
-                    item.description || '',
-                    item.subcat || ''
+                    item.name  '',
+                    item.category  '',
+                    item.price  0,
+                    item.imglink  '',
+                    item.description  '',
+                    item.subcat  ''
                 ]
             );
+
             await conn.execute(
                 `INSERT INTO All_Items (PID, name, category, price, imglink, description, subcat)
-                VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
                 [
                     pid,
-                    item.name || '',
-                    item.category || '',
-                    item.price || 0,
-                    item.imglink || '',
+                    item.name  '',
+                    item.category  '',
+                    item.price  0,
+                    item.imglink  '',
+                    item.description  '',
                     item.subcat || ''
                 ]
             );
         }
+
         await conn.end();
-        res.json({ success: true, message: `Wiped ${targetTable}, inserted ${items.length} items, also copied to All_Items.` });
+
+        res.json({
+            success: true,
+            message: `Wiped ${targetTable}, inserted ${items.length} items, also copied to All_Items.`
+        });
+
     } catch (err) {
-        console.error(err);
+        console.error('Error processing upload:', err);
         res.status(500).json({ success: false, message: 'Server error.' });
     }
 });
-
 
 
 
