@@ -522,7 +522,6 @@ app.post('/complete-profile', async (req, res) => {
         bio = ''
     } = req.body;
 
-    // Basic required field check
     if (!firstName || !lastName || !email || !phone || !addressLine1 || !city || !state || !postalCode || !country) {
         return res.status(400).json({
             status: 'error',
@@ -530,8 +529,10 @@ app.post('/complete-profile', async (req, res) => {
         });
     }
 
+    let conn;
     try {
-        const conn = await mysql2Promise.createConnection(banerjeeConfig);
+        conn = await mysql2Promise.createConnection(banerjeeConfig);
+
         const [result] = await conn.execute(
             `UPDATE profiles SET 
                 first_name = ?, 
@@ -559,7 +560,6 @@ app.post('/complete-profile', async (req, res) => {
                 email.trim()
             ]
         );
-        await conn.end();
 
         if (result.affectedRows === 0) {
             return res.status(404).json({
@@ -568,19 +568,23 @@ app.post('/complete-profile', async (req, res) => {
             });
         }
 
-        res.status(200).json({
+        return res.status(200).json({
             status: 'success',
             message: 'Profile updated successfully.'
         });
 
     } catch (err) {
-        console.error(`[${new Date().toISOString()}] ❌ Profile update failed`, err);
-        res.status(500).json({
+        console.error(`[${new Date().toISOString()}] ❌ Profile update failed:`, err.message);
+        return res.status(500).json({
             status: 'error',
-            message: 'Update failed due to server error.'
+            message: 'Update failed due to server error.',
+            error: err.message
         });
+    } finally {
+        if (conn) await conn.end();
     }
 });
+
 
 
 
