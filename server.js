@@ -509,7 +509,8 @@ app.get('/checkout-profile', async (req, res) => {
 
 app.post('/complete-profile', async (req, res) => {
     const {
-        name,
+        firstName,
+        lastName,
         email,
         phone,
         addressLine1,
@@ -522,7 +523,7 @@ app.post('/complete-profile', async (req, res) => {
     } = req.body;
 
     // Basic required field check
-    if (!name || !email || !phone || !addressLine1 || !city || !state || !postalCode || !country) {
+    if (!firstName || !lastName || !email || !phone || !addressLine1 || !city || !state || !postalCode || !country) {
         return res.status(400).json({
             status: 'error',
             message: 'All required fields must be filled.'
@@ -533,7 +534,8 @@ app.post('/complete-profile', async (req, res) => {
         const conn = await mysql2Promise.createConnection(banerjeeConfig);
         const [result] = await conn.execute(
             `UPDATE profiles SET 
-                full_name = ?, 
+                first_name = ?, 
+                last_name = ?, 
                 phone_number = ?, 
                 address_line_1 = ?, 
                 address_line_2 = ?, 
@@ -543,7 +545,19 @@ app.post('/complete-profile', async (req, res) => {
                 country = ?, 
                 bio = ?
             WHERE email_address = ?`,
-            [name.trim(), phone.trim(), addressLine1.trim(), addressLine2.trim(), city.trim(), state.trim(), postalCode.trim(), country.trim(), bio.trim(), email.trim()]
+            [
+                firstName.trim(),
+                lastName.trim(),
+                phone.trim(),
+                addressLine1.trim(),
+                addressLine2.trim(),
+                city.trim(),
+                state.trim(),
+                postalCode.trim(),
+                country.trim(),
+                bio.trim(),
+                email.trim()
+            ]
         );
         await conn.end();
 
@@ -567,6 +581,7 @@ app.post('/complete-profile', async (req, res) => {
         });
     }
 });
+
 
 
 // Shop Product Routes (Banerjee DB)
