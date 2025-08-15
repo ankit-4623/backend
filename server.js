@@ -509,23 +509,31 @@ app.get('/checkout-profile', async (req, res) => {
 
 app.post('/complete-profile', async (req, res) => {
     const {
+        name,
         email,
         phone,
         addressLine1,
-        addressLine2,
+        addressLine2 = '',
         city,
         state,
         postalCode,
         country,
-        bio
+        bio = ''
     } = req.body;
-    if (!email || !phone || !addressLine1 || !city || !state || !postalCode || !country) {
-        return res.status(400).json({ status: 'error', message: 'All required fields must be filled.' });
+
+    // Basic required field check
+    if (!name || !email || !phone || !addressLine1 || !city || !state || !postalCode || !country) {
+        return res.status(400).json({
+            status: 'error',
+            message: 'All required fields must be filled.'
+        });
     }
+
     try {
         const conn = await mysql2Promise.createConnection(banerjeeConfig);
         const [result] = await conn.execute(
             `UPDATE profiles SET 
+                full_name = ?, 
                 phone_number = ?, 
                 address_line_1 = ?, 
                 address_line_2 = ?, 
@@ -535,18 +543,31 @@ app.post('/complete-profile', async (req, res) => {
                 country = ?, 
                 bio = ?
             WHERE email_address = ?`,
-            [phone, addressLine1, addressLine2, city, state, postalCode, country, bio, email]
+            [name.trim(), phone.trim(), addressLine1.trim(), addressLine2.trim(), city.trim(), state.trim(), postalCode.trim(), country.trim(), bio.trim(), email.trim()]
         );
         await conn.end();
+
         if (result.affectedRows === 0) {
-            return res.status(404).json({ status: 'error', message: 'No user updated. Email not found?' });
+            return res.status(404).json({
+                status: 'error',
+                message: 'No user updated. Email not found.'
+            });
         }
-        res.json({ success: true });
+
+        res.status(200).json({
+            status: 'success',
+            message: 'Profile updated successfully.'
+        });
+
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ status: 'error', message: 'Update failed due to server error.' });
+        console.error(`[${new Date().toISOString()}] ❌ Profile update failed`, err);
+        res.status(500).json({
+            status: 'error',
+            message: 'Update failed due to server error.'
+        });
     }
 });
+
 
 // Shop Product Routes (Banerjee DB)
 app.get('/api/stock', async (req, res) => {
