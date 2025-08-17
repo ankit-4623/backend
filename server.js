@@ -1,5 +1,6 @@
 const express = require("express");
 const PDFDocument = require("pdfkit");
+const path = require('path')
 const mysql = require("mysql2");
 const mysql2Promise = require("mysql2/promise");
 const cors = require("cors");
@@ -788,23 +789,33 @@ app.get("/customer/api/orders/:email/invoice/:orderId", async (req, res) => {
   }
 });
 
-
-
-
-// ✅ invoice generator
-// Unicode for ₹
+// pdf formate
 
 function generateInvoice(order, res) {
   const doc = new PDFDocument({ margin: 50 });
+
+  // ✅ Load a font that supports ₹ symbol (NotoSans/DejaVuSans/etc.)
+  const fontPath = path.join(process.cwd(), "fonts", "NotoSans-Regular.ttf");
+  doc.registerFont("NotoSans", fontPath);
+  doc.font("NotoSans");
+
   const INR = "\u20B9"; // Unicode for ₹ symbol
 
-  res.setHeader("Content-Disposition", `attachment; filename=invoice-${order.id}.pdf`);
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename=invoice-${order.id}.pdf`
+  );
   res.setHeader("Content-Type", "application/pdf");
 
   doc.pipe(res);
 
   // --- Company Header ---
-  doc.fontSize(18).text("Banerjee Electronics and Consultancy Services", { align: "center", underline: true });
+  doc
+    .fontSize(18)
+    .text("Banerjee Electronics and Consultancy Services", {
+      align: "center",
+      underline: true,
+    });
   doc.moveDown();
 
   // --- Invoice Header ---
@@ -819,7 +830,8 @@ function generateInvoice(order, res) {
 
   // --- Customer details ---
   doc.fontSize(14).text("Customer Details:", { underline: true });
-  doc.fontSize(12)
+  doc
+    .fontSize(12)
     .text(`Name: ${order.customer}`)
     .text(`Email: ${order.email_id}`)
     .text(`Phone: ${order.phone || ""}`);
@@ -828,7 +840,8 @@ function generateInvoice(order, res) {
   // --- Shipping address ---
   doc.fontSize(14).text("Shipping Address:", { underline: true });
   const addr = order.shipping_address || {};
-  doc.fontSize(12)
+  doc
+    .fontSize(12)
     .text(addr.address_line1 || "")
     .text(addr.address_line2 || "")
     .text(`${addr.city || ""}, ${addr.state || ""}`)
@@ -863,15 +876,18 @@ function generateInvoice(order, res) {
   doc.moveDown(2);
 
   // --- Total ---
-  doc.fontSize(14).text(`Grand Total: ${INR}${order.amount}`, { align: "right" });
+  doc.fontSize(14).text(`Grand Total: ${INR}${order.amount}`, {
+    align: "right",
+  });
   doc.moveDown(2);
 
   // --- Footer ---
-  doc.fontSize(12).text("Thank you for your purchase!", { align: "center" });
+  doc.fontSize(12).text("Thank you for your purchase!", {
+    align: "center",
+  });
 
   doc.end();
 }
-
 
 
 // Shop Product Routes (Banerjee DB)
