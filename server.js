@@ -679,14 +679,16 @@ app.get("/customer/api/orders/:email/invoice/:orderId", async (req, res) => {
 
     const conn = await mysql2Promise.createConnection(banerjeeConfig);
 
-    // first get the order
+    // fetch order + profile info
     const query = `
       SELECT 
           o.order_id AS id, 
           CONCAT(p.first_name, ' ', p.last_name) AS customer,
+          p.phone_number,
           o.delivery_date AS date,
           o.status,
           o.email_id,
+          p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
           o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
           o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
       FROM Orders o
@@ -703,7 +705,7 @@ app.get("/customer/api/orders/:email/invoice/:orderId", async (req, res) => {
 
     const order = results[0];
 
-    // rebuild product IDs list
+    // build product list
     const productIds = [
       order.pid_1,
       order.pid_2,
@@ -717,39 +719,60 @@ app.get("/customer/api/orders/:email/invoice/:orderId", async (req, res) => {
       order.pid_10,
     ].filter((pid) => pid);
 
-    // calculate total
     let total_amount = 0;
+    let products = [];
+
     for (const pid of productIds) {
       const [itemId, quantity] = pid.split("-");
       const [itemRows] = await conn.execute(
-        `SELECT name, price FROM All_Items WHERE PID = ?`,
+        `SELECT PID, name, price, imglink AS image FROM All_Items WHERE PID = ?`,
         [itemId]
       );
       if (itemRows.length > 0) {
-        total_amount +=
-          (parseFloat(itemRows[0].price) || 0) * (parseInt(quantity) || 1);
+        const product = itemRows[0];
+        const qty = parseInt(quantity) || 1;
+        const price = parseFloat(product.price) || 0;
+
+        total_amount += price * qty;
+
+        products.push({
+          id: product.PID,
+          name: product.name,
+          image: product.image,
+          price: price.toFixed(2),
+          quantity: qty,
+          subtotal: (price * qty).toFixed(2),
+        });
       }
     }
 
     await conn.end();
 
-    // Check delivery status
+    // Invoice only after delivery
     if (order.status !== "delivered") {
       return res.status(403).json({
         message: "Invoice only available after delivery",
       });
     }
 
-    // build final order object for invoice
+    // final invoice object
     const invoiceOrder = {
       id: `ORD${String(order.id).padStart(3, "0")}`,
       customer: order.customer || "Unknown",
-      date: order.date
-        ? new Date(order.date).toISOString().split("T")[0]
-        : "",
+      phone: order.phone_number || "",
+      date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
       amount: total_amount.toFixed(2),
       status: order.status,
       email_id: order.email_id,
+      shipping_address: {
+        address_line1: order.address_line_1 || "",
+        address_line2: order.address_line_2 || "",
+        city: order.city || "",
+        state: order.state || "",
+        postal_code: order.postal_code || "",
+        country: order.country || "",
+      },
+      products: products,
     };
 
     // generate PDF invoice
@@ -767,36 +790,89 @@ app.get("/customer/api/orders/:email/invoice/:orderId", async (req, res) => {
 
 
 
+
 // ✅ invoice generator
+// Unicode for ₹
+
 function generateInvoice(order, res) {
   const doc = new PDFDocument({ margin: 50 });
+  const INR = "\u20B9"; // Unicode for ₹ symbol
 
-  // set headers so browser downloads PDF
   res.setHeader("Content-Disposition", `attachment; filename=invoice-${order.id}.pdf`);
   res.setHeader("Content-Type", "application/pdf");
 
-  // pipe PDF to response
   doc.pipe(res);
 
-  // --- Invoice content ---
+  // --- Company Header ---
+  doc.fontSize(18).text("Banerjee Electronics and Consultancy Services", { align: "center", underline: true });
+  doc.moveDown();
+
+  // --- Invoice Header ---
   doc.fontSize(20).text("Invoice", { align: "center" });
   doc.moveDown();
 
+  // --- Order info ---
   doc.fontSize(12).text(`Invoice ID: ${order.id}`);
-  doc.text(`Customer: ${order.customer}`);
-  doc.text(`Email: ${order.email_id}`);
-  doc.text(`Source: ${order.source}`);
   doc.text(`Date: ${order.date || new Date().toLocaleDateString()}`);
   doc.text(`Status: ${order.status}`);
   doc.moveDown();
-  doc.text(`Amount: ₹${order.amount}`, { align: "right" });
+
+  // --- Customer details ---
+  doc.fontSize(14).text("Customer Details:", { underline: true });
+  doc.fontSize(12)
+    .text(`Name: ${order.customer}`)
+    .text(`Email: ${order.email_id}`)
+    .text(`Phone: ${order.phone || ""}`);
+  doc.moveDown();
+
+  // --- Shipping address ---
+  doc.fontSize(14).text("Shipping Address:", { underline: true });
+  const addr = order.shipping_address || {};
+  doc.fontSize(12)
+    .text(addr.address_line1 || "")
+    .text(addr.address_line2 || "")
+    .text(`${addr.city || ""}, ${addr.state || ""}`)
+    .text(`${addr.postal_code || ""}, ${addr.country || ""}`);
+  doc.moveDown();
+
+  // --- Products Table ---
+  doc.fontSize(14).text("Products:", { underline: true });
+  doc.moveDown(0.5);
+
+  const tableTop = doc.y;
+  const itemX = 50;
+  const qtyX = 300;
+  const priceX = 370;
+  const subtotalX = 450;
+
+  doc.fontSize(12).text("Item", itemX, tableTop);
+  doc.text("Qty", qtyX, tableTop);
+  doc.text("Price", priceX, tableTop);
+  doc.text("Subtotal", subtotalX, tableTop);
+
+  doc.moveDown();
+
+  order.products.forEach((product, i) => {
+    const y = tableTop + 25 + i * 20;
+    doc.fontSize(12).text(product.name, itemX, y, { width: 240 });
+    doc.text(product.quantity.toString(), qtyX, y);
+    doc.text(`${INR}${product.price}`, priceX, y);
+    doc.text(`${INR}${product.subtotal}`, subtotalX, y);
+  });
 
   doc.moveDown(2);
-  doc.text("Thank you for your purchase!", { align: "center" });
 
-  // finalize PDF
+  // --- Total ---
+  doc.fontSize(14).text(`Grand Total: ${INR}${order.amount}`, { align: "right" });
+  doc.moveDown(2);
+
+  // --- Footer ---
+  doc.fontSize(12).text("Thank you for your purchase!", { align: "center" });
+
   doc.end();
 }
+
+
 
 // Shop Product Routes (Banerjee DB)
 app.get("/api/stock", async (req, res) => {
@@ -1128,20 +1204,24 @@ app.post("/submit-order", async (req, res) => {
 app.get("/api/orders", async (req, res) => {
   try {
     const conn = await mysql2Promise.createConnection(banerjeeConfig);
+
     const query = `
-            SELECT 
-                o.order_id AS id, 
-                CONCAT(p.first_name, ' ', p.last_name) AS customer,
-                o.delivery_date AS date,
-                o.status,
-                o.email_id,
-                o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
-                o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
-            FROM Orders o
-            LEFT JOIN profiles p ON o.email_id = p.email_address
-            ORDER BY o.order_id DESC
-        `;
+      SELECT 
+          o.order_id AS id, 
+          CONCAT(p.first_name, ' ', p.last_name) AS customer,
+          o.delivery_date AS date,
+          o.status,
+          o.email_id,
+          p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
+          o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
+          o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
+      FROM Orders o
+      LEFT JOIN profiles p ON o.email_id = p.email_address
+      ORDER BY o.order_id DESC
+    `;
+
     const [results] = await conn.execute(query);
+
     const formatted = await Promise.all(
       results.map(async (order) => {
         const productIds = [
@@ -1156,18 +1236,35 @@ app.get("/api/orders", async (req, res) => {
           order.pid_9,
           order.pid_10,
         ].filter((pid) => pid);
+
         let total_amount = 0;
+        let products = [];
+
         for (const pid of productIds) {
           const [itemId, quantity] = pid.split("-");
           const [itemRows] = await conn.execute(
-            `SELECT price FROM All_Items WHERE PID = ?`,
+            `SELECT PID, name, price, imglink AS image FROM All_Items WHERE PID = ?`,
             [itemId]
           );
+
           if (itemRows.length > 0) {
-            total_amount +=
-              (parseFloat(itemRows[0].price) || 0) * (parseInt(quantity) || 1);
+            const product = itemRows[0];
+            const qty = parseInt(quantity) || 1;
+            const price = parseFloat(product.price) || 0;
+
+            total_amount += price * qty;
+
+            products.push({
+              id: product.PID,
+              name: product.name,
+              image: product.image,
+              price: price.toFixed(2),
+              quantity: qty,
+              subtotal: (price * qty).toFixed(2),
+            });
           }
         }
+
         const inferSource = () => {
           for (let pid of productIds) {
             if (pid.startsWith("2")) return "Electrical";
@@ -1175,20 +1272,30 @@ app.get("/api/orders", async (req, res) => {
           }
           return "Unknown";
         };
+
         return {
           id: `ORD${String(order.id).padStart(3, "0")}`,
           customer: order.customer || "Unknown",
-          date: order.date
-            ? new Date(order.date).toISOString().split("T")[0]
-            : "",
+          date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
           amount: total_amount.toFixed(2),
           status: order.status || "Pending",
           source: inferSource(),
           email_id: order.email_id || "Unknown",
+          shipping_address: {
+            address_line1: order.address_line_1 || "",
+            address_line2: order.address_line_2 || "",
+            city: order.city || "",
+            state: order.state || "",
+            postal_code: order.postal_code || "",
+            country: order.country || "",
+          },
+          products: products,
         };
       })
     );
+
     await conn.end();
+
     res.json({
       status: "success",
       count: formatted.length,
@@ -1196,10 +1303,7 @@ app.get("/api/orders", async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
-    console.error(
-      `[${new Date().toISOString()}] ❌ Error fetching orders:`,
-      err
-    );
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching orders:`, err);
     res.status(500).json({
       status: "error",
       message: "Failed to fetch orders",
@@ -1209,25 +1313,31 @@ app.get("/api/orders", async (req, res) => {
   }
 });
 
+
+
 // get customer order
 app.get("/customer/api/orders/:email", async (req, res) => {
   try {
     const customerEmail = req.params.email;
     const conn = await mysql2Promise.createConnection(banerjeeConfig);
+
     const query = `
-            SELECT 
-                o.order_id AS id, 
-                CONCAT(p.first_name, ' ', p.last_name) AS customer,
-                o.delivery_date AS date,
-                o.status,
-                o.email_id,
-                o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
-                o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
-            FROM Orders o
-            LEFT JOIN profiles p ON o.email_id = p.email_address
-            WHERE o.email_id = ?
-            ORDER BY o.order_id DESC
-        `;
+      SELECT 
+          o.order_id AS id, 
+          CONCAT(p.first_name, ' ', p.last_name) AS customer,
+          o.delivery_date AS date,
+          o.status,
+          o.email_id,
+          p.phone_number,
+          p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
+          o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
+          o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
+      FROM Orders o
+      LEFT JOIN profiles p ON o.email_id = p.email_address
+      WHERE o.email_id = ?
+      ORDER BY o.order_id DESC
+    `;
+
     const [results] = await conn.execute(query, [customerEmail]);
 
     const formatted = await Promise.all(
@@ -1246,15 +1356,30 @@ app.get("/customer/api/orders/:email", async (req, res) => {
         ].filter((pid) => pid);
 
         let total_amount = 0;
+        let products = [];
+
         for (const pid of productIds) {
           const [itemId, quantity] = pid.split("-");
           const [itemRows] = await conn.execute(
-            `SELECT price FROM All_Items WHERE PID = ?`,
+            `SELECT PID, name, price, imglink AS image FROM All_Items WHERE PID = ?`,
             [itemId]
           );
+
           if (itemRows.length > 0) {
-            total_amount +=
-              (parseFloat(itemRows[0].price) || 0) * (parseInt(quantity) || 1);
+            const product = itemRows[0];
+            const qty = parseInt(quantity) || 1;
+            const price = parseFloat(product.price) || 0;
+
+            total_amount += price * qty;
+
+            products.push({
+              id: product.PID,
+              name: product.name,
+              image: product.image,
+              price: price.toFixed(2),
+              quantity: qty,
+              subtotal: (price * qty).toFixed(2),
+            });
           }
         }
 
@@ -1269,13 +1394,21 @@ app.get("/customer/api/orders/:email", async (req, res) => {
         return {
           id: `ORD${String(order.id).padStart(3, "0")}`,
           customer: order.customer || "Unknown",
-          date: order.date
-            ? new Date(order.date).toISOString().split("T")[0]
-            : "",
+          phone: order.phone_number || "",
+          date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
           amount: total_amount.toFixed(2),
           status: order.status || "Pending",
           source: inferSource(),
           email_id: order.email_id || "Unknown",
+          shipping_address: {
+            address_line1: order.address_line_1 || "",
+            address_line2: order.address_line_2 || "",
+            city: order.city || "",
+            state: order.state || "",
+            postal_code: order.postal_code || "",
+            country: order.country || "",
+          },
+          products: products,
         };
       })
     );
@@ -1290,9 +1423,7 @@ app.get("/customer/api/orders/:email", async (req, res) => {
     });
   } catch (err) {
     console.error(
-      `[${new Date().toISOString()}] ❌ Error fetching orders for ${
-        req.params.email
-      }:`,
+      `[${new Date().toISOString()}] ❌ Error fetching orders for ${req.params.email}:`,
       err
     );
     res.status(500).json({
@@ -1303,6 +1434,7 @@ app.get("/customer/api/orders/:email", async (req, res) => {
     });
   }
 });
+
 
 // Shop Admin Item Upload Routes (Banerjee DB)
 
