@@ -661,6 +661,123 @@ app.post("/complete-profile", async (req, res) => {
     if (conn) await conn.end();
   }
 });
+// order fetch for admin
+app.get("/customer/api/orders/:orderId", async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    // Convert "ORD038" -> 38 (numeric)
+    const numericOrderId = parseInt(orderId.replace(/^ORD/, ""), 10);
+
+    if (isNaN(numericOrderId)) {
+      return res.status(400).json({
+        message: "Invalid orderId format. Use ORDxxx or numeric ID",
+      });
+    }
+
+    const conn = await mysql2Promise.createConnection(banerjeeConfig);
+
+    // fetch order + profile info
+    const query = `
+      SELECT 
+          o.order_id AS id, 
+          CONCAT(p.first_name, ' ', p.last_name) AS customer,
+          p.phone_number,
+          o.delivery_date AS date,
+          o.status,
+          o.email_id,
+          p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
+          o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
+          o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
+      FROM Orders o
+      LEFT JOIN profiles p ON o.email_id = p.email_address
+      WHERE o.order_id = ?
+      LIMIT 1
+    `;
+    const [results] = await conn.execute(query, [numericOrderId]);
+
+    if (results.length === 0) {
+      await conn.end();
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    const order = results[0];
+
+    // build product list
+    const productIds = [
+      order.pid_1,
+      order.pid_2,
+      order.pid_3,
+      order.pid_4,
+      order.pid_5,
+      order.pid_6,
+      order.pid_7,
+      order.pid_8,
+      order.pid_9,
+      order.pid_10,
+    ].filter((pid) => pid);
+
+    let total_amount = 0;
+    let products = [];
+
+    for (const pid of productIds) {
+      const [itemId, quantity] = pid.split("-");
+      const [itemRows] = await conn.execute(
+        `SELECT PID, name, price, imglink AS image FROM All_Items WHERE PID = ?`,
+        [itemId]
+      );
+      if (itemRows.length > 0) {
+        const product = itemRows[0];
+        const qty = parseInt(quantity) || 1;
+        const price = parseFloat(product.price) || 0;
+
+        total_amount += price * qty;
+
+        products.push({
+          id: product.PID,
+          name: product.name,
+          image: product.image,
+          price: price.toFixed(2),
+          quantity: qty,
+          subtotal: (price * qty).toFixed(2),
+        });
+      }
+    }
+
+    await conn.end();
+
+    // final order object
+    const orderDetails = {
+      id: `ORD${String(order.id).padStart(3, "0")}`,
+      customer: order.customer || "Unknown",
+      phone: order.phone_number || "",
+      date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
+      amount: total_amount.toFixed(2),
+      status: order.status,
+      email_id: order.email_id,
+      shipping_address: {
+        address_line1: order.address_line_1 || "",
+        address_line2: order.address_line_2 || "",
+        city: order.city || "",
+        state: order.state || "",
+        postal_code: order.postal_code || "",
+        country: order.country || "",
+      },
+      products: products,
+    };
+
+    res.json(orderDetails);
+  } catch (err) {
+    console.error("Order details error:", err);
+    res.status(500).json({
+      error: "Internal Server Error",
+      message: "An unexpected error occurred",
+      details: err.message,
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
 
 // invoice
  // <-- your PDF generator
