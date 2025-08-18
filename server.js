@@ -1,5 +1,6 @@
 const express = require("express");
 const PDFDocument = require("pdfkit");
+const nodemailer = require("nodemailer");
 const path = require('path')
 const mysql = require("mysql2");
 const mysql2Promise = require("mysql2/promise");
@@ -438,6 +439,146 @@ app.post("/login", async (req, res) => {
     });
   }
 });
+// forgot password
+// transporter 
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.SENDER_EMAIL||'tathagatasenguptaventures@gmail.com',
+    pass: process.env.EMAIL_PASSWORD||'cgkd iedb gnsv fvga',
+  },
+});
+// send otp
+app.post('/reset-password/sendOtp', async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    // 🔹 Validate input
+    if (!email) {
+      return res.status(400).json({ error: "Email is required" });
+    }
+
+    const connection = await mysql2Promise.createConnection(banerjeeConfig);
+
+    // 🔹 Check if user exists
+    const [rows] = await connection.execute(
+      "SELECT first_name, last_name FROM profiles WHERE email_address = ?",
+      [email]
+    );
+
+    if (rows.length === 0) {
+      await connection.end();
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // 🔹 Generate OTP
+    const buffer = crypto.randomBytes(4);
+    const otp = (buffer.readUInt32BE(0) % 900000) + 100000;
+
+    // 🔹 Save OTP & expiry to DB
+    await connection.execute(
+      "UPDATE profiles SET reset_token = ?, reset_expires = ? WHERE email_address = ?",
+      [otp, Date.now() + 3600000, email]  // 1 hour expiry
+    );
+
+    await connection.end();
+
+    // 🔹 Send email
+    const mailOption = {
+      from: "BECS <noreply@tathagatasenguptaventures@gmail.com>",
+      to: email,
+      subject: "Password Reset OTP",
+      text: `You requested a password reset. Your OTP is: ${otp}`,
+    };
+
+    transporter.sendMail(mailOption, (error, info) => {
+      if (error) {
+        console.error("❌ Email error:", error);
+        return res.status(500).json({ error: "Failed to send email" });
+      }
+      return res.status(200).json({ message: "OTP sent to your email" });
+    });
+
+  } catch (err) {
+    console.error("❌ Reset password error:", err);
+    return res.status(500).json({ error: "Server Error" });
+  }
+});
+
+//check otp
+app.post('/reset-password/checkOtp', async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+
+    const connection = await mysql2Promise.createConnection(banerjeeConfig);
+
+    // Find user with matching OTP and valid expiry
+    const [rows] = await connection.execute(
+      "SELECT email_address FROM profiles WHERE email_address = ? AND reset_token = ? AND reset_expires > ?",
+      [email, otp, Date.now()]
+    );
+
+    if (rows.length === 0) {
+      await connection.end();
+      return res.status(400).json({ error: "OTP is invalid or has expired" });
+    }
+
+    // ✅ OTP is valid → only then clear it
+    await connection.execute(
+      "UPDATE profiles SET reset_token = NULL, reset_expires = NULL WHERE email_address = ? AND reset_token = ?",
+      [email, otp]   // ensure we only clear the matching OTP
+    );
+
+    await connection.end();
+
+    return res.status(200).json({ message: "OTP successfully verified" });
+
+  } catch (err) {
+    console.error("❌ OTP Check Error:", err);
+    return res.status(500).json({ error: "Server Error" });
+  }
+});
+
+// reset password
+app.post('/reset-password',async(req,res)=>{
+ try {
+    const { email, newPassword } = req.body;
+
+    if (!email || !newPassword) {
+      return res.status(400).json({ error: "Email and new password are required" });
+    }
+
+    const connection = await mysql2Promise.createConnection(banerjeeConfig);
+
+    // Find user
+    const [rows] = await connection.execute(
+      "SELECT email_address FROM profiles WHERE email_address = ?",
+      [email]
+    );
+
+    if (rows.length === 0) {
+      await connection.end();
+      return res.status(400).json({ error: "User not found" });
+    }
+
+    // Hash new password
+    // const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update password & clear reset_token + reset_expires
+    await connection.execute(
+      "UPDATE profiles SET password = ?, reset_token = NULL, reset_expires = NULL WHERE email_address = ?",
+      [newPassword, email]
+    );
+
+    await connection.end();
+
+    res.status(200).json({ message: "Password reset successfully" });
+  } catch (err) {
+    console.error("❌ Reset password error:", err);
+    res.status(500).json({ error: "Server Error" });
+  }
+})
+
 
 app.post("/admin-login", async (req, res) => {
   const { email, password } = req.body;
