@@ -872,12 +872,18 @@ app.get("/customer/api/orders/:orderId", async (req, res) => {
         `SELECT PID, name, price, imglink AS image FROM All_Items WHERE PID = ?`,
         [itemId]
       );
+
       if (itemRows.length > 0) {
         const product = itemRows[0];
         const qty = parseInt(quantity) || 1;
         const price = parseFloat(product.price) || 0;
 
         total_amount += price * qty;
+
+        // infer source per product
+        let source = "Unknown";
+        if (itemId.startsWith("2")) source = "Electrical";
+        else if (itemId.startsWith("1")) source = "Electronics";
 
         products.push({
           id: product.PID,
@@ -886,6 +892,7 @@ app.get("/customer/api/orders/:orderId", async (req, res) => {
           price: price.toFixed(2),
           quantity: qty,
           subtotal: (price * qty).toFixed(2),
+          source: source, // ✅ added per product
         });
       }
     }
@@ -923,6 +930,7 @@ app.get("/customer/api/orders/:orderId", async (req, res) => {
     });
   }
 });
+
 
 
 // invoice
