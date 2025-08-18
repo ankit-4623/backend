@@ -1519,30 +1519,37 @@ app.get("/api/orders", async (req, res) => {
         let total_amount = 0;
         let products = [];
 
-        for (const pid of productIds) {
-          const [itemId, quantity] = pid.split("-");
-          const [itemRows] = await conn.execute(
-            `SELECT PID, name, price, imglink AS image FROM All_Items WHERE PID = ?`,
-            [itemId]
-          );
+  for (const pid of productIds) {
+  const [itemId, quantity] = pid.split("-");
+  const [itemRows] = await conn.execute(
+    `SELECT PID, name, price, imglink AS image FROM All_Items WHERE PID = ?`,
+    [itemId]
+  );
 
-          if (itemRows.length > 0) {
-            const product = itemRows[0];
-            const qty = parseInt(quantity) || 1;
-            const price = parseFloat(product.price) || 0;
+  if (itemRows.length > 0) {
+    const product = itemRows[0];
+    const qty = parseInt(quantity) || 1;
+    const price = parseFloat(product.price) || 0;
 
-            total_amount += price * qty;
+    total_amount += price * qty;
 
-            products.push({
-              id: product.PID,
-              name: product.name,
-              image: product.image,
-              price: price.toFixed(2),
-              quantity: qty,
-              subtotal: (price * qty).toFixed(2),
-            });
-          }
-        }
+    // Determine source per product
+    let source = "Unknown";
+    if (itemId.startsWith("2")) source = "Electrical";
+    else if (itemId.startsWith("1")) source = "Electronics";
+
+    products.push({
+      id: product.PID,
+      name: product.name,
+      image: product.image,
+      price: price.toFixed(2),
+      quantity: qty,
+      subtotal: (price * qty).toFixed(2),
+      source: source, // ✅ now product has its actual source
+    });
+  }
+}
+
 
         const inferSource = () => {
           for (let pid of productIds) {
