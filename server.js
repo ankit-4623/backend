@@ -43,7 +43,7 @@ app.use(
 // Handle preflight requests globally
 // app.options('*', cors());
 
-app.use(timeout("15s"));
+app.use(timeout("60s"));
 app.use(express.json({ limit: "10mb" }));
 app.use(bodyParser.json());
 app.use(morgan("dev"));
@@ -66,6 +66,11 @@ const banerjeeConfig = {
   user: "u617065149_Banerjee",
   password: "SwattikA1",
   database: "u617065149_Banerjee_Elect",
+   waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
+  connectTimeout: 10000,
+  ssl: { rejectUnauthorized: false },
 };
 
 const becsConfig = {
@@ -78,7 +83,7 @@ const becsConfig = {
   connectionLimit: 10,
   queueLimit: 0,
   connectTimeout: 10000,
- // ssl: { rejectUnauthorized: false },
+  ssl: { rejectUnauthorized: false },
 };
 
 // MySQL Connections
@@ -1449,7 +1454,7 @@ app.get("/api/orders", async (req, res) => {
 
 
 // get customer order
-app.get("/customer/api/order/:email", async (req, res) => {
+app.get("/customer/api/orders/:email", async (req, res) => {
   try {
     const customerEmail = req.params.email;
     const conn = await mysql2Promise.createConnection(banerjeeConfig);
