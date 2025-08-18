@@ -78,7 +78,7 @@ const becsConfig = {
   connectionLimit: 10,
   queueLimit: 0,
   connectTimeout: 10000,
-  ssl: { rejectUnauthorized: false },
+ // ssl: { rejectUnauthorized: false },
 };
 
 // MySQL Connections
