@@ -1595,7 +1595,7 @@ app.get("/api/orders", async (req, res) => {
 
 
 // get customer order
-app.get("/customer/api/orders/:email", async (req, res) => {
+app.get("/customer/api/order/:email", async (req, res) => {
   try {
     const customerEmail = req.params.email;
     const conn = await mysql2Promise.createConnection(banerjeeConfig);
