@@ -12,19 +12,20 @@ const morgan = require("morgan");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
 const axios = require("axios");
-require("dotenv").config();
+require("dotenv").config({
+  path:'.env'
+});
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT;
 
 // Razorpay Initialization
 const razorpay = new Razorpay({
-  key_id: "rzp_test_vC2iJLBTJe8eQ8",
-  key_secret: "tpQkW35efUkcLHyMxNSOMJTf",
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret:process.env.RAZORPAY_KEY_SECRET,
 });
 
-const RAZORPAY_KEY_ID = "rzp_test_vC2iJLBTJe8eQ8";
-const RAZORPAY_KEY_SECRET = "tpQkW35efUkcLHyMxNSOMJTf";
+
 
 // Middleware
 app.use(
@@ -79,10 +80,10 @@ const banerjeeConfig = {
 };
 
 const becsConfig = {
-  host: process.env.DB_HOST || "217.21.84.52",
-  user: process.env.DB_USER || "u617065149_BECS",
-  password: process.env.DB_PASS || "Becs@2k24",
-  database: process.env.DB_NAME || "u617065149_BECS",
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER ,
+  password: process.env.DB_PASS,
+  database: process.env.DB_NAME,
   port: process.env.DB_PORT || 3306,
   waitForConnections: true,
   connectionLimit: 10,
@@ -126,7 +127,7 @@ try {
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
     databaseURL:
-      process.env.FIREBASE_DATABASE_URL || "becs-133d8.firebaseapp.com",
+      process.env.FIREBASE_DATABASE_URL,
   });
 } catch (error) {
   console.warn(
@@ -448,8 +449,8 @@ app.post("/login", async (req, res) => {
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
-    user: process.env.SENDER_EMAIL||'tathagatasenguptaventures@gmail.com',
-    pass: process.env.EMAIL_PASSWORD||'cgkd iedb gnsv fvga',
+    user: process.env.SENDER_EMAIL,
+    pass: process.env.EMAIL_PASSWORD,
   },
 });
 // send otp
