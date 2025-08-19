@@ -1739,7 +1739,7 @@ app.get("/customer/api/orders/:orderId", async (req, res) => {
     const orderQuery = `
       SELECT 
         o.order_id AS id,
-        CONCAT(p.first_name, ' ', p.last_name) AS customer,
+        CONCAT(COALESCE(p.first_name, ''), ' ', COALESCE(p.last_name, '')) AS customer,
         p.first_name,
         p.last_name,
         p.phone_number,
@@ -1771,14 +1771,14 @@ app.get("/customer/api/orders/:orderId", async (req, res) => {
     const productIds = [
       order.pid_1, order.pid_2, order.pid_3, order.pid_4, order.pid_5,
       order.pid_6, order.pid_7, order.pid_8, order.pid_9, order.pid_10,
-    ].filter(pid => pid && pid.trim() !== "");
+    ].filter(pid => pid && pid.toString().trim() !== "");
 
     if (productIds.length === 0) {
       return res.json({
         status: "success",
         order: {
           id: `ORD${String(order.id).padStart(3, "0")}`,
-          customer: order.customer || "Unknown",
+          customer: order.customer && order.customer.trim() !== " " ? order.customer.trim() : "Unknown",
           phone: order.phone_number || "",
           date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
           amount: "0.00",
@@ -1799,6 +1799,13 @@ app.get("/customer/api/orders/:orderId", async (req, res) => {
             country: order.country || "",
           },
           products: [],
+          products_count: 0,
+          order_summary: {
+            subtotal: "0.00",
+            tax: "0.00",
+            shipping: "0.00",
+            total: "0.00"
+          }
         },
         timestamp: new Date().toISOString()
       });
@@ -1806,38 +1813,40 @@ app.get("/customer/api/orders/:orderId", async (req, res) => {
 
     // Extract unique item IDs for batch fetching
     const uniqueItemIds = [];
-    const productQuantities = {};
     
     productIds.forEach(pid => {
-      const [itemId, quantity] = pid.split("-");
+      const [itemId] = pid.toString().split("-");
       if (itemId && !uniqueItemIds.includes(itemId)) {
         uniqueItemIds.push(itemId);
       }
-      productQuantities[itemId] = parseInt(quantity) || 1;
     });
 
-    // Batch fetch all products in one query (MAJOR OPTIMIZATION)
-    const placeholders = uniqueItemIds.map(() => '?').join(',');
-    const productsQuery = `
-      SELECT PID, name, price, imglink AS image, category, description, subcat
-      FROM All_Items 
-      WHERE PID IN (${placeholders})
-    `;
+    let productsMap = {};
+    
+    // Only fetch products if we have valid item IDs
+    if (uniqueItemIds.length > 0) {
+      // Batch fetch all products in one query (MAJOR OPTIMIZATION)
+      const placeholders = uniqueItemIds.map(() => '?').join(',');
+      const productsQuery = `
+        SELECT PID, name, price, imglink AS image, category, description, subcat
+        FROM All_Items 
+        WHERE PID IN (${placeholders})
+      `;
 
-    const [productResults] = await conn.execute(productsQuery, uniqueItemIds);
+      const [productResults] = await conn.execute(productsQuery, uniqueItemIds);
 
-    // Create product lookup map for O(1) access
-    const productsMap = {};
-    productResults.forEach(product => {
-      productsMap[product.PID] = product;
-    });
+      // Create product lookup map for O(1) access
+      productResults.forEach(product => {
+        productsMap[product.PID] = product;
+      });
+    }
 
     // Build products array with calculated totals
     let total_amount = 0;
     const products = [];
 
     productIds.forEach(pid => {
-      const [itemId, quantity] = pid.split("-");
+      const [itemId, quantity] = pid.toString().split("-");
       const product = productsMap[itemId];
 
       if (product) {
@@ -1863,13 +1872,16 @@ app.get("/customer/api/orders/:orderId", async (req, res) => {
           description: product.description || "",
           subcat: product.subcat || ""
         });
+      } else {
+        // Log missing products for debugging
+        console.warn(`Product not found: ${itemId}`);
       }
     });
 
     // Build final order response
     const orderDetails = {
       id: `ORD${String(order.id).padStart(3, "0")}`,
-      customer: order.customer || "Unknown",
+      customer: order.customer && order.customer.trim() !== " " ? order.customer.trim() : "Unknown",
       phone: order.phone_number || "",
       date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
       amount: total_amount.toFixed(2),
@@ -1925,6 +1937,14 @@ app.get("/customer/api/orders/:orderId", async (req, res) => {
       });
     }
 
+    if (err.code === 'ER_BAD_FIELD_ERROR') {
+      return res.status(500).json({
+        status: "error",
+        message: "Database column error - please contact support",
+        timestamp: new Date().toISOString()
+      });
+    }
+
     res.status(500).json({
       status: "error",
       message: "Internal Server Error",
@@ -1944,6 +1964,299 @@ app.get("/customer/api/orders/:orderId", async (req, res) => {
   }
 });
 
+// query
+
+// API: Submit enquiry with form type
+app.post("/api/enquiry", async (req, res) => {
+  try {
+    const { 
+      firstName, 
+      lastName, 
+      email, 
+      phone, 
+      solarService, 
+      solarType = 'general', // This acts as form type
+      enquiryDetails
+    } = req.body;
+
+    // Validate required fields
+    if (!firstName || !lastName || !email || !phone) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Required fields missing" 
+      });
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Invalid email format" 
+      });
+    }
+
+    const [result] = await pool.query(
+      `INSERT INTO enquiries 
+        (first_name, last_name, email, phone, solar_service, solar_type, details, created_at) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [firstName, lastName, email, phone, solarService, solarType, enquiryDetails]
+    );
+
+    res.status(201).json({ 
+      success: true, 
+      message: "Enquiry submitted successfully",
+      enquiryId: result.insertId
+    });
+
+  } catch (err) {
+    console.error("Error submitting enquiry:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to submit enquiry. Please try again." 
+    });
+  }
+});
+
+// API: Get all enquiries with filtering and pagination
+app.get("/api/enquiries", async (req, res) => {
+  try {
+    const { 
+      page = 1, 
+      limit = 10, 
+      solarType, // Filter by solar type instead of form type
+      status = 'all',
+      sortBy = 'created_at',
+      sortOrder = 'DESC'
+    } = req.query;
+
+    const offset = (page - 1) * limit;
+    
+    // Build WHERE clause
+    let whereClause = "WHERE 1=1";
+    const queryParams = [];
+    
+    if (solarType && solarType !== 'all') {
+      whereClause += " AND solar_type = ?";
+      queryParams.push(solarType);
+    }
+    
+    if (status && status !== 'all') {
+      whereClause += " AND status = ?";
+      queryParams.push(status);
+    }
+
+    // Get total count
+    const [countResult] = await pool.query(
+      `SELECT COUNT(*) as total FROM enquiries ${whereClause}`,
+      queryParams
+    );
+    const totalRecords = countResult[0].total;
+
+    // Get enquiries with pagination
+    const [rows] = await pool.query(
+      `SELECT 
+        id,
+        first_name,
+        last_name,
+        email,
+        phone,
+        solar_service,
+        solar_type,
+        details,
+        status,
+        created_at,
+        updated_at
+      FROM enquiries 
+      ${whereClause}
+      ORDER BY ${sortBy} ${sortOrder}
+      LIMIT ? OFFSET ?`,
+      [...queryParams, parseInt(limit), parseInt(offset)]
+    );
+
+    // Get solar type statistics
+    const [statsResult] = await pool.query(`
+      SELECT 
+        solar_type,
+        COUNT(*) as count,
+        COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending,
+        COUNT(CASE WHEN status = 'contacted' THEN 1 END) as contacted,
+        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed
+      FROM enquiries 
+      GROUP BY solar_type
+      ORDER BY count DESC
+    `);
+
+    res.json({
+      success: true,
+      data: rows,
+      pagination: {
+        currentPage: parseInt(page),
+        totalPages: Math.ceil(totalRecords / limit),
+        totalRecords,
+        recordsPerPage: parseInt(limit)
+      },
+      statistics: statsResult
+    });
+
+  } catch (err) {
+    console.error("Error fetching enquiries:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to fetch enquiries" 
+    });
+  }
+});
+
+// API: Get single enquiry by ID
+app.get("/api/enquiry/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const [rows] = await pool.query(
+      "SELECT * FROM enquiries WHERE id = ?",
+      [id]
+    );
+    
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Enquiry not found"
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: rows[0]
+    });
+    
+  } catch (err) {
+    console.error("Error fetching enquiry:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch enquiry"
+    });
+  }
+});
+
+// API: Update enquiry status
+app.patch("/api/enquiry/:id/status", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, notes } = req.body;
+    
+    // Validate status
+    const validStatuses = ['pending', 'contacted', 'in_progress', 'completed', 'cancelled'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid status value"
+      });
+    }
+    
+    const [result] = await pool.query(
+      `UPDATE enquiries 
+       SET status = ?, admin_notes = ?, updated_at = NOW() 
+       WHERE id = ?`,
+      [status, notes, id]
+    );
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Enquiry not found"
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: "Status updated successfully"
+    });
+    
+  } catch (err) {
+    console.error("Error updating enquiry status:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update status"
+    });
+  }
+});
+
+// API: Delete enquiry
+app.delete("/api/enquiry/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const [result] = await pool.query(
+      "DELETE FROM enquiries WHERE id = ?",
+      [id]
+    );
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Enquiry not found"
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: "Enquiry deleted successfully"
+    });
+    
+  } catch (err) {
+    console.error("Error deleting enquiry:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete enquiry"
+    });
+  }
+});
+
+// API: Get solar types and their configurations
+app.get("/api/solar-types", async (req, res) => {
+  try {
+    const solarTypes = {
+      'residential': {
+        name: 'Residential Solar',
+        fields: ['firstName', 'lastName', 'email', 'phone', 'solarService', 'solarType', 'enquiryDetails'],
+        description: 'For home solar installations'
+      },
+      'commercial': {
+        name: 'Commercial Solar',
+        fields: ['firstName', 'lastName', 'email', 'phone', 'companyName', 'solarService', 'enquiryDetails'],
+        description: 'For business solar solutions'
+      },
+      'industrial': {
+        name: 'Industrial Solar',
+        fields: ['firstName', 'lastName', 'email', 'phone', 'companyName', 'capacity', 'enquiryDetails'],
+        description: 'For large-scale industrial solar projects'
+      },
+      'maintenance': {
+        name: 'Solar Maintenance',
+        fields: ['firstName', 'lastName', 'email', 'phone', 'existingSystem', 'issueDescription'],
+        description: 'For solar system maintenance and repairs'
+      },
+      'consultation': {
+        name: 'Free Consultation',
+        fields: ['firstName', 'lastName', 'email', 'phone', 'propertyType', 'enquiryDetails'],
+        description: 'For solar consultation requests'
+      }
+    };
+    
+    res.json({
+      success: true,
+      data: solarTypes
+    });
+    
+  } catch (err) {
+    console.error("Error fetching solar types:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch solar types"
+    });
+  }
+});
 
 
 // get customer order
