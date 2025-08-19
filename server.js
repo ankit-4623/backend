@@ -12,9 +12,10 @@ const morgan = require("morgan");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
 const axios = require("axios");
-require("dotenv").config({
-  path:'.env'
-});
+// require("dotenv").config({
+//   path:'.env'
+// });
+require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT;
@@ -72,7 +73,7 @@ const banerjeeConfig = {
   user: process.env.BN_DB_USER,
   password: process.env.BN_DB_PASS,
   database: process.env.BN_DB_NAME,
-   waitForConnections: true,
+  waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
   connectTimeout: 300000,
@@ -1613,7 +1614,7 @@ app.get("/api/orders", async (req, res) => {
   }
 });
 
-
+// console.log(`env working - ${process.env.RAZORPAY_KEY_ID}`);
 
 // get customer order
 app.get("/customer/api/order/:email", async (req, res) => {
