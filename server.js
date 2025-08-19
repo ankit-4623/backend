@@ -25,7 +25,8 @@ const razorpay = new Razorpay({
   key_secret:process.env.RAZORPAY_KEY_SECRET,
 });
 
-
+const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID;
+const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET;
 
 // Middleware
 app.use(
