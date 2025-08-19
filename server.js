@@ -15,7 +15,9 @@ const axios = require("axios");
 // require("dotenv").config({
 //   path:'.env'
 // });
-require("dotenv").config();
+require("dotenv").config({
+   path: '.env'
+});
 
 const app = express();
 const PORT = process.env.PORT;
@@ -814,129 +816,130 @@ app.post("/complete-profile", async (req, res) => {
     if (conn) await conn.end();
   }
 });
+
 // order fetch for admin
-app.get("/customer/api/orders/:orderId", async (req, res) => {
-  try {
-    const { orderId } = req.params;
+// app.get("/customer/api/orders/:orderId", async (req, res) => {
+//   try {
+//     const { orderId } = req.params;
 
-    // Convert "ORD038" -> 38 (numeric)
-    const numericOrderId = parseInt(orderId.replace(/^ORD/, ""), 10);
+//     // Convert "ORD038" -> 38 (numeric)
+//     const numericOrderId = parseInt(orderId.replace(/^ORD/, ""), 10);
 
-    if (isNaN(numericOrderId)) {
-      return res.status(400).json({
-        message: "Invalid orderId format. Use ORDxxx or numeric ID",
-      });
-    }
+//     if (isNaN(numericOrderId)) {
+//       return res.status(400).json({
+//         message: "Invalid orderId format. Use ORDxxx or numeric ID",
+//       });
+//     }
 
-    const conn = await mysql2Promise.createConnection(banerjeeConfig);
+//     const conn = await mysql2Promise.createConnection(banerjeeConfig);
 
-    // fetch order + profile info
-    const query = `
-      SELECT 
-          o.order_id AS id, 
-          CONCAT(p.first_name, ' ', p.last_name) AS customer,
-          p.phone_number,
-          o.delivery_date AS date,
-          o.status,
-          o.email_id,
-          p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
-          o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
-          o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
-      FROM Orders o
-      LEFT JOIN profiles p ON o.email_id = p.email_address
-      WHERE o.order_id = ?
-      LIMIT 1
-    `;
-    const [results] = await conn.execute(query, [numericOrderId]);
+//     // fetch order + profile info
+//     const query = `
+//       SELECT 
+//           o.order_id AS id, 
+//           CONCAT(p.first_name, ' ', p.last_name) AS customer,
+//           p.phone_number,
+//           o.delivery_date AS date,
+//           o.status,
+//           o.email_id,
+//           p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
+//           o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
+//           o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
+//       FROM Orders o
+//       LEFT JOIN profiles p ON o.email_id = p.email_address
+//       WHERE o.order_id = ?
+//       LIMIT 1
+//     `;
+//     const [results] = await conn.execute(query, [numericOrderId]);
 
-    if (results.length === 0) {
-      await conn.end();
-      return res.status(404).json({ message: "Order not found" });
-    }
+//     if (results.length === 0) {
+//       await conn.end();
+//       return res.status(404).json({ message: "Order not found" });
+//     }
 
-    const order = results[0];
+//     const order = results[0];
 
-    // build product list
-    const productIds = [
-      order.pid_1,
-      order.pid_2,
-      order.pid_3,
-      order.pid_4,
-      order.pid_5,
-      order.pid_6,
-      order.pid_7,
-      order.pid_8,
-      order.pid_9,
-      order.pid_10,
-    ].filter((pid) => pid);
+//     // build product list
+//     const productIds = [
+//       order.pid_1,
+//       order.pid_2,
+//       order.pid_3,
+//       order.pid_4,
+//       order.pid_5,
+//       order.pid_6,
+//       order.pid_7,
+//       order.pid_8,
+//       order.pid_9,
+//       order.pid_10,
+//     ].filter((pid) => pid);
 
-    let total_amount = 0;
-    let products = [];
+//     let total_amount = 0;
+//     let products = [];
 
-    for (const pid of productIds) {
-      const [itemId, quantity] = pid.split("-");
-      const [itemRows] = await conn.execute(
-        `SELECT PID, name, price, imglink AS image FROM All_Items WHERE PID = ?`,
-        [itemId]
-      );
+//     for (const pid of productIds) {
+//       const [itemId, quantity] = pid.split("-");
+//       const [itemRows] = await conn.execute(
+//         `SELECT PID, name, price, imglink AS image FROM All_Items WHERE PID = ?`,
+//         [itemId]
+//       );
 
-      if (itemRows.length > 0) {
-        const product = itemRows[0];
-        const qty = parseInt(quantity) || 1;
-        const price = parseFloat(product.price) || 0;
+//       if (itemRows.length > 0) {
+//         const product = itemRows[0];
+//         const qty = parseInt(quantity) || 1;
+//         const price = parseFloat(product.price) || 0;
 
-        total_amount += price * qty;
+//         total_amount += price * qty;
 
-        // infer source per product
-        let source = "Unknown";
-        if (itemId.startsWith("2")) source = "Electrical";
-        else if (itemId.startsWith("1")) source = "Electronics";
+//         // infer source per product
+//         let source = "Unknown";
+//         if (itemId.startsWith("2")) source = "Electrical";
+//         else if (itemId.startsWith("1")) source = "Electronics";
 
-        products.push({
-          id: product.PID,
-          name: product.name,
-          image: product.image,
-          price: price.toFixed(2),
-          quantity: qty,
-          subtotal: (price * qty).toFixed(2),
-          source: source, // ✅ added per product
-        });
-      }
-    }
+//         products.push({
+//           id: product.PID,
+//           name: product.name,
+//           image: product.image,
+//           price: price.toFixed(2),
+//           quantity: qty,
+//           subtotal: (price * qty).toFixed(2),
+//           source: source, // ✅ added per product
+//         });
+//       }
+//     }
 
-    await conn.end();
+//     await conn.end();
 
-    // final order object
-    const orderDetails = {
-      id: `ORD${String(order.id).padStart(3, "0")}`,
-      customer: order.customer || "Unknown",
-      phone: order.phone_number || "",
-      date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
-      amount: total_amount.toFixed(2),
-      status: order.status,
-      email_id: order.email_id,
-      shipping_address: {
-        address_line1: order.address_line_1 || "",
-        address_line2: order.address_line_2 || "",
-        city: order.city || "",
-        state: order.state || "",
-        postal_code: order.postal_code || "",
-        country: order.country || "",
-      },
-      products: products,
-    };
+//     // final order object
+//     const orderDetails = {
+//       id: `ORD${String(order.id).padStart(3, "0")}`,
+//       customer: order.customer || "Unknown",
+//       phone: order.phone_number || "",
+//       date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
+//       amount: total_amount.toFixed(2),
+//       status: order.status,
+//       email_id: order.email_id,
+//       shipping_address: {
+//         address_line1: order.address_line_1 || "",
+//         address_line2: order.address_line_2 || "",
+//         city: order.city || "",
+//         state: order.state || "",
+//         postal_code: order.postal_code || "",
+//         country: order.country || "",
+//       },
+//       products: products,
+//     };
 
-    res.json(orderDetails);
-  } catch (err) {
-    console.error("Order details error:", err);
-    res.status(500).json({
-      error: "Internal Server Error",
-      message: "An unexpected error occurred",
-      details: err.message,
-      timestamp: new Date().toISOString(),
-    });
-  }
-});
+//     res.json(orderDetails);
+//   } catch (err) {
+//     console.error("Order details error:", err);
+//     res.status(500).json({
+//       error: "Internal Server Error",
+//       message: "An unexpected error occurred",
+//       details: err.message,
+//       timestamp: new Date().toISOString(),
+//     });
+//   }
+// });
 
 
 
@@ -1495,93 +1498,298 @@ app.post("/submit-order", async (req, res) => {
   }
 });
 
-app.get("/api/orders", async (req, res) => {
-  try {
-    const conn = await mysql2Promise.createConnection(banerjeeConfig);
+const pool = mysql2Promise.createPool(banerjeeConfig);
 
-    const query = `
-      SELECT 
-          o.order_id AS id, 
-          CONCAT(p.first_name, ' ', p.last_name) AS customer,
-          o.delivery_date AS date,
-          o.status,
-          o.email_id,
-          p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
-          o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
-          o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
+ app.get("/api/orders", async (req, res) => {
+  let conn;
+  try {
+    // Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = (page - 1) * limit;
+    
+    // Optional filters
+    const status = req.query.status;
+    const search = req.query.search;
+    
+    conn = await pool.getConnection();
+
+    // Build WHERE clause for filters
+    let whereClause = '';
+    let queryParams = [];
+    
+    if (status && status !== 'all') {
+      whereClause += ' WHERE o.status = ?';
+      queryParams.push(status);
+    }
+    
+    if (search) {
+      whereClause += whereClause ? ' AND' : ' WHERE';
+      whereClause += ' (CONCAT(p.first_name, " ", p.last_name) LIKE ? OR o.email_id LIKE ? OR o.order_id LIKE ?)';
+      queryParams.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
+
+    // Get total count for pagination
+    const countQuery = `
+      SELECT COUNT(*) as total
       FROM Orders o
       LEFT JOIN profiles p ON o.email_id = p.email_address
+      ${whereClause}
+    `;
+    
+    const [countResult] = await conn.execute(countQuery, queryParams);
+    const totalOrders = countResult[0].total;
+    const totalPages = Math.ceil(totalOrders / limit);
+
+    // Main query with pagination
+    const query = `
+      SELECT 
+        o.order_id AS id,
+        CONCAT(p.first_name, ' ', p.last_name) AS customer,
+        o.delivery_date AS date,
+        o.status,
+        o.email_id,
+        p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
+        o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
+        o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
+      FROM Orders o
+      LEFT JOIN profiles p ON o.email_id = p.email_address
+      ${whereClause}
       ORDER BY o.order_id DESC
+      LIMIT ? OFFSET ?
     `;
 
-    const [results] = await conn.execute(query);
+    const [results] = await conn.execute(query, [...queryParams, limit, offset]);
 
-    const formatted = await Promise.all(
-      results.map(async (order) => {
-        const productIds = [
-          order.pid_1,
-          order.pid_2,
-          order.pid_3,
-          order.pid_4,
-          order.pid_5,
-          order.pid_6,
-          order.pid_7,
-          order.pid_8,
-          order.pid_9,
-          order.pid_10,
-        ].filter((pid) => pid);
+    if (results.length === 0) {
+      return res.json({
+        status: "success",
+        count: 0,
+        orders: [],
+        pagination: {
+          page,
+          limit,
+          totalOrders,
+          totalPages,
+          hasNext: false,
+          hasPrev: false
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
 
-        let total_amount = 0;
-        let products = [];
-
-  for (const pid of productIds) {
-  const [itemId, quantity] = pid.split("-");
-  const [itemRows] = await conn.execute(
-    `SELECT PID, name, price, imglink AS image FROM All_Items WHERE PID = ?`,
-    [itemId]
-  );
-
-  if (itemRows.length > 0) {
-    const product = itemRows[0];
-    const qty = parseInt(quantity) || 1;
-    const price = parseFloat(product.price) || 0;
-
-    total_amount += price * qty;
-
-    // Determine source per product
-    let source = "Unknown";
-    if (itemId.startsWith("2")) source = "Electrical";
-    else if (itemId.startsWith("1")) source = "Electronics";
-
-    products.push({
-      id: product.PID,
-      name: product.name,
-      image: product.image,
-      price: price.toFixed(2),
-      quantity: qty,
-      subtotal: (price * qty).toFixed(2),
-      source: source, // ✅ now product has its actual source
+    // Collect all unique product IDs from all orders
+    const allProductIds = [];
+    results.forEach(order => {
+      const productIds = [
+        order.pid_1, order.pid_2, order.pid_3, order.pid_4, order.pid_5,
+        order.pid_6, order.pid_7, order.pid_8, order.pid_9, order.pid_10,
+      ].filter(pid => pid);
+      
+      productIds.forEach(pid => {
+        const [itemId] = pid.split("-");
+        if (!allProductIds.includes(itemId)) {
+          allProductIds.push(itemId);
+        }
+      });
     });
+
+    // Fetch all products in one query
+    let productsMap = {};
+    if (allProductIds.length > 0) {
+      const placeholders = allProductIds.map(() => '?').join(',');
+      const productsQuery = `
+        SELECT PID, name, price, imglink AS image 
+        FROM All_Items 
+        WHERE PID IN (${placeholders})
+      `;
+      
+      const [productResults] = await conn.execute(productsQuery, allProductIds);
+      
+      // Create a map for quick product lookup
+      productResults.forEach(product => {
+        productsMap[product.PID] = product;
+      });
+    }
+
+    // Process orders with the fetched products
+    const formatted = results.map(order => {
+      const productIds = [
+        order.pid_1, order.pid_2, order.pid_3, order.pid_4, order.pid_5,
+        order.pid_6, order.pid_7, order.pid_8, order.pid_9, order.pid_10,
+      ].filter(pid => pid);
+
+      let total_amount = 0;
+      let products = [];
+
+      productIds.forEach(pid => {
+        const [itemId, quantity] = pid.split("-");
+        const product = productsMap[itemId];
+        
+        if (product) {
+          const qty = parseInt(quantity) || 1;
+          const price = parseFloat(product.price) || 0;
+          total_amount += price * qty;
+
+          // Determine source per product
+          let source = "Unknown";
+          if (itemId.startsWith("2")) source = "Electrical";
+          else if (itemId.startsWith("1")) source = "Electronics";
+
+          products.push({
+            id: product.PID,
+            name: product.name,
+            image: product.image,
+            price: price.toFixed(2),
+            quantity: qty,
+            subtotal: (price * qty).toFixed(2),
+            source: source,
+          });
+        }
+      });
+
+      // Infer order source from first product
+      const inferSource = () => {
+        for (let pid of productIds) {
+          if (pid.startsWith("2")) return "Electrical";
+          if (pid.startsWith("1")) return "Electronics";
+        }
+        return "Unknown";
+      };
+
+      return {
+        id: `ORD${String(order.id).padStart(3, "0")}`,
+        customer: order.customer || "Unknown",
+        date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
+        amount: total_amount.toFixed(2),
+        status: order.status || "Pending",
+        source: inferSource(),
+        email_id: order.email_id || "Unknown",
+        shipping_address: {
+          address_line1: order.address_line_1 || "",
+          address_line2: order.address_line_2 || "",
+          city: order.city || "",
+          state: order.state || "",
+          postal_code: order.postal_code || "",
+          country: order.country || "",
+        },
+        products: products,
+      };
+    });
+
+    res.json({
+      status: "success",
+      count: formatted.length,
+      orders: formatted,
+      pagination: {
+        page,
+        limit,
+        totalOrders,
+        totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1
+      },
+      filters: {
+        status: status || 'all',
+        search: search || ''
+      },
+      timestamp: new Date().toISOString(),
+    });
+
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching orders:`, err);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to fetch orders",
+      details: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error',
+      timestamp: new Date().toISOString(),
+    });
+  } finally {
+    if (conn) {
+      try {
+        conn.release(); // Return connection to pool
+      } catch (releaseErr) {
+        console.error("Error releasing connection:", releaseErr);
+      }
+    }
   }
-}
+});
 
+// get single order
+app.get("/customer/api/orders/:orderId", async (req, res) => {
+  let conn;
+  try {
+    const { orderId } = req.params;
 
-        const inferSource = () => {
-          for (let pid of productIds) {
-            if (pid.startsWith("2")) return "Electrical";
-            if (pid.startsWith("1")) return "Electronics";
-          }
-          return "Unknown";
-        };
+    // Convert "ORD038" -> 38 (numeric) or handle plain numeric IDs
+    const numericOrderId = parseInt(orderId.replace(/^ORD/, ""), 10);
+    
+    if (isNaN(numericOrderId)) {
+      return res.status(400).json({
+        status: "error",
+        message: "Invalid orderId format. Use ORDxxx or numeric ID",
+        timestamp: new Date().toISOString()
+      });
+    }
 
-        return {
+    // Use connection pool instead of creating new connection
+    conn = await pool.getConnection();
+
+    // Fetch order + profile info
+    const orderQuery = `
+      SELECT 
+        o.order_id AS id,
+        CONCAT(p.first_name, ' ', p.last_name) AS customer,
+        p.first_name,
+        p.last_name,
+        p.phone_number,
+        o.delivery_date AS date,
+        o.status,
+        o.email_id,
+        p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
+        o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
+        o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
+      FROM Orders o
+      LEFT JOIN profiles p ON o.email_id = p.email_address
+      WHERE o.order_id = ?
+      LIMIT 1
+    `;
+
+    const [orderResults] = await conn.execute(orderQuery, [numericOrderId]);
+
+    if (orderResults.length === 0) {
+      return res.status(404).json({
+        status: "error",
+        message: "Order not found",
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const order = orderResults[0];
+
+    // Extract and validate product IDs
+    const productIds = [
+      order.pid_1, order.pid_2, order.pid_3, order.pid_4, order.pid_5,
+      order.pid_6, order.pid_7, order.pid_8, order.pid_9, order.pid_10,
+    ].filter(pid => pid && pid.trim() !== "");
+
+    if (productIds.length === 0) {
+      return res.json({
+        status: "success",
+        order: {
           id: `ORD${String(order.id).padStart(3, "0")}`,
           customer: order.customer || "Unknown",
+          phone: order.phone_number || "",
           date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
-          amount: total_amount.toFixed(2),
+          amount: "0.00",
           status: order.status || "Pending",
-          source: inferSource(),
-          email_id: order.email_id || "Unknown",
+          email_id: order.email_id || "",
+          customer_details: {
+            first_name: order.first_name || "",
+            last_name: order.last_name || "",
+            phone: order.phone_number || "",
+            email: order.email_id || ""
+          },
           shipping_address: {
             address_line1: order.address_line_1 || "",
             address_line2: order.address_line_2 || "",
@@ -1590,31 +1798,153 @@ app.get("/api/orders", async (req, res) => {
             postal_code: order.postal_code || "",
             country: order.country || "",
           },
-          products: products,
-        };
-      })
-    );
+          products: [],
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
 
-    await conn.end();
+    // Extract unique item IDs for batch fetching
+    const uniqueItemIds = [];
+    const productQuantities = {};
+    
+    productIds.forEach(pid => {
+      const [itemId, quantity] = pid.split("-");
+      if (itemId && !uniqueItemIds.includes(itemId)) {
+        uniqueItemIds.push(itemId);
+      }
+      productQuantities[itemId] = parseInt(quantity) || 1;
+    });
+
+    // Batch fetch all products in one query (MAJOR OPTIMIZATION)
+    const placeholders = uniqueItemIds.map(() => '?').join(',');
+    const productsQuery = `
+      SELECT PID, name, price, imglink AS image, category, description, subcat
+      FROM All_Items 
+      WHERE PID IN (${placeholders})
+    `;
+
+    const [productResults] = await conn.execute(productsQuery, uniqueItemIds);
+
+    // Create product lookup map for O(1) access
+    const productsMap = {};
+    productResults.forEach(product => {
+      productsMap[product.PID] = product;
+    });
+
+    // Build products array with calculated totals
+    let total_amount = 0;
+    const products = [];
+
+    productIds.forEach(pid => {
+      const [itemId, quantity] = pid.split("-");
+      const product = productsMap[itemId];
+
+      if (product) {
+        const qty = parseInt(quantity) || 1;
+        const price = parseFloat(product.price) || 0;
+        const subtotal = price * qty;
+        total_amount += subtotal;
+
+        // Determine source based on PID prefix
+        let source = "Unknown";
+        if (itemId.startsWith("2")) source = "Electrical";
+        else if (itemId.startsWith("1")) source = "Electronics";
+
+        products.push({
+          id: product.PID,
+          name: product.name || "Unknown Product",
+          image: product.image || "",
+          price: price.toFixed(2),
+          quantity: qty,
+          subtotal: subtotal.toFixed(2),
+          source: source,
+          category: product.category || "",
+          description: product.description || "",
+          subcat: product.subcat || ""
+        });
+      }
+    });
+
+    // Build final order response
+    const orderDetails = {
+      id: `ORD${String(order.id).padStart(3, "0")}`,
+      customer: order.customer || "Unknown",
+      phone: order.phone_number || "",
+      date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
+      amount: total_amount.toFixed(2),
+      status: order.status || "Pending",
+      email_id: order.email_id || "",
+      customer_details: {
+        first_name: order.first_name || "",
+        last_name: order.last_name || "",
+        phone: order.phone_number || "",
+        email: order.email_id || ""
+      },
+      shipping_address: {
+        address_line1: order.address_line_1 || "",
+        address_line2: order.address_line_2 || "",
+        city: order.city || "",
+        state: order.state || "",
+        postal_code: order.postal_code || "",
+        country: order.country || "",
+      },
+      products: products,
+      products_count: products.length,
+      order_summary: {
+        subtotal: total_amount.toFixed(2),
+        tax: "0.00", // Add tax calculation if needed
+        shipping: "0.00", // Add shipping calculation if needed
+        total: total_amount.toFixed(2)
+      }
+    };
 
     res.json({
       status: "success",
-      count: formatted.length,
-      orders: formatted,
-      timestamp: new Date().toISOString(),
+      order: orderDetails,
+      timestamp: new Date().toISOString()
     });
+
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] ❌ Error fetching orders:`, err);
+    console.error(`[${new Date().toISOString()}] ❌ Customer order details error:`, err);
+    
+    // Different error responses based on error type
+    if (err.code === 'ECONNREFUSED') {
+      return res.status(503).json({
+        status: "error",
+        message: "Database connection failed",
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    if (err.code === 'ER_NO_SUCH_TABLE') {
+      return res.status(500).json({
+        status: "error",
+        message: "Database schema error",
+        timestamp: new Date().toISOString()
+      });
+    }
+
     res.status(500).json({
       status: "error",
-      message: "Failed to fetch orders",
-      details: err.message,
+      message: "Internal Server Error",
+      details: process.env.NODE_ENV === 'development' ? err.message : "An unexpected error occurred",
       timestamp: new Date().toISOString(),
     });
+
+  } finally {
+    // Always release connection back to pool
+    if (conn) {
+      try {
+        conn.release();
+      } catch (releaseErr) {
+        console.error("Error releasing connection:", releaseErr);
+      }
+    }
   }
 });
 
-// console.log(`env working - ${process.env.RAZORPAY_KEY_ID}`);
+
 
 // get customer order
 app.get("/customer/api/order/:email", async (req, res) => {
