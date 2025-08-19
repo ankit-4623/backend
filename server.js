@@ -1746,6 +1746,13 @@ app.post("/api/upload-items", async (req, res) => {
       .json({ success: false, message: "Missing type or items array." });
   }
 
+  // Check if items array is too large - increased limit for your needs
+  if (items.length > 10000) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Too many items. Maximum 10000 items per upload." });
+  }
+
   // Decide target table and prefix
   const targetTable =
     type === "electronics"
@@ -1760,56 +1767,132 @@ app.post("/api/upload-items", async (req, res) => {
     return res.status(400).json({ success: false, message: "Invalid type." });
   }
 
+  let conn;
   try {
-    const conn = await mysql2Promise.createConnection(banerjeeConfig);
+    // Create connection with optimized settings
+    conn = await mysql2Promise.createConnection({
+      ...banerjeeConfig,
+      acquireTimeout: 300000, // 5 minutes
+      timeout: 300000, // 5 minutes
+      reconnect: true,
+      // Optimize for bulk operations
+      multipleStatements: true
+    });
+
+    // Start transaction for data consistency
+    await conn.beginTransaction();
 
     // Clear old data
     await conn.execute(`DELETE FROM ${targetTable}`);
+    await conn.execute(`DELETE FROM All_Items WHERE PID LIKE '${prefix}%'`);
 
-    // Insert new items
-    for (const item of items) {
-      const pid = await getNextPID(conn, targetTable, prefix);
+    // Get the next starting PID
+    let currentPID = await getNextPID(conn, targetTable, prefix);
 
-      await conn.execute(
-        `INSERT INTO ${targetTable} (PID, name, category, price, imglink, description, subcat)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [
-          pid,
-          item.name || "",
-          item.category || "",
-          item.price || 0,
-          item.imglink || "",
-          item.description || "",
-          item.subcat || "",
-        ]
-      );
+    // Prepare batch insert data
+    const batchSize = 100; // Process in batches of 100
+    const targetTableValues = [];
+    const allItemsValues = [];
+    
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const pid = currentPID++;
+      
+      const itemData = [
+        pid,
+        item.name || "",
+        item.category || "",
+        parseFloat(item.price) || 0,
+        item.imglink || "",
+        item.description || "",
+        item.subcat || ""
+      ];
+      
+      targetTableValues.push(itemData);
+      allItemsValues.push(itemData);
 
-      await conn.execute(
-        `INSERT INTO All_Items (PID, name, category, price, imglink, description, subcat)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [
-          pid,
-          item.name || "",
-          item.category || "",
-          item.price || 0,
-          item.imglink || "",
-          item.description || "",
-          item.subcat || "",
-        ]
-      );
+      // Execute batch when we reach batch size or at the end
+      if (targetTableValues.length === batchSize || i === items.length - 1) {
+        // Batch insert into target table
+        if (targetTableValues.length > 0) {
+          const targetPlaceholders = targetTableValues.map(() => "(?, ?, ?, ?, ?, ?, ?)").join(", ");
+          const targetFlatValues = targetTableValues.flat();
+          
+          await conn.execute(
+            `INSERT INTO ${targetTable} (PID, name, category, price, imglink, description, subcat) VALUES ${targetPlaceholders}`,
+            targetFlatValues
+          );
+
+          // Batch insert into All_Items
+          const allItemsPlaceholders = allItemsValues.map(() => "(?, ?, ?, ?, ?, ?, ?)").join(", ");
+          const allItemsFlatValues = allItemsValues.flat();
+          
+          await conn.execute(
+            `INSERT INTO All_Items (PID, name, category, price, imglink, description, subcat) VALUES ${allItemsPlaceholders}`,
+            allItemsFlatValues
+          );
+
+          // Clear arrays for next batch
+          targetTableValues.length = 0;
+          allItemsValues.length = 0;
+        }
+      }
     }
 
-    await conn.end();
+    // Commit transaction
+    await conn.commit();
 
     res.json({
       success: true,
-      message: `Wiped ${targetTable}, inserted ${items.length} items, also copied to All_Items.`,
+      message: `Successfully processed ${items.length} items. Wiped ${targetTable}, inserted ${items.length} items, also copied to All_Items.`,
+      itemsProcessed: items.length
     });
+
   } catch (err) {
     console.error("Error processing upload:", err);
-    res.status(500).json({ success: false, message: "Server error." });
+    
+    // Rollback transaction if it was started
+    if (conn) {
+      try {
+        await conn.rollback();
+      } catch (rollbackErr) {
+        console.error("Error rolling back transaction:", rollbackErr);
+      }
+    }
+
+    res.status(500).json({ 
+      success: false, 
+      message: "Server error during upload.", 
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  } finally {
+    // Always close the connection
+    if (conn) {
+      try {
+        await conn.end();
+      } catch (closeErr) {
+        console.error("Error closing connection:", closeErr);
+      }
+    }
   }
 });
+
+// Helper function to get next PID - optimized version
+async function getNextPID(conn, tableName, prefix) {
+  try {
+    const [rows] = await conn.execute(
+      `SELECT MAX(CAST(SUBSTRING(PID, 2) AS UNSIGNED)) as maxId FROM ${tableName} WHERE PID LIKE ?`,
+      [`${prefix}%`]
+    );
+    
+    const maxId = rows[0]?.maxId || 0;
+    return `${prefix}${String(maxId + 1).padStart(6, '0')}`;
+  } catch (err) {
+    console.error("Error getting next PID:", err);
+    // Fallback to timestamp-based ID
+    return `${prefix}${Date.now()}`;
+  }
+}
 
 // Course Management Routes (BECS DB)
 app.get("/api/courses", async (req, res, next) => {
