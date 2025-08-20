@@ -2398,420 +2398,102 @@ app.get("/customer/api/orders/email/:emailId", async (req, res) => {
 //     }
 //   }
 // });
+
+
 // query
 
-// API: Submit enquiry with form type
-app.post("/api/enquiry", async (req, res) => {
+
+app.post("/api/enquiries", async (req, res) => {
   try {
-    const { 
-      firstName, 
-      lastName, 
-      email, 
-      phone, 
-      solarService, 
-      solarType = 'general', // This acts as form type
-      enquiryDetails
-    } = req.body;
+    const { firstName, lastName, email, phone, service, solarType, details, formname } = req.body;
 
-    // Validate required fields
-    if (!firstName || !lastName || !email || !phone) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Required fields missing" 
-      });
-    }
-
-    // Validate email format
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Invalid email format" 
-      });
-    }
-
-    const [result] = await pool.query(
-      `INSERT INTO enquiries 
-        (first_name, last_name, email, phone, solar_service, solar_type, details, created_at) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [firstName, lastName, email, phone, solarService, solarType, enquiryDetails]
-    );
-
-    res.status(201).json({ 
-      success: true, 
-      message: "Enquiry submitted successfully",
-      enquiryId: result.insertId
-    });
-
-  } catch (err) {
-    console.error("Error submitting enquiry:", err);
-    res.status(500).json({ 
-      success: false, 
-      message: "Failed to submit enquiry. Please try again." 
-    });
-  }
-});
-
-// API: Get all enquiries with filtering and pagination
-app.get("/api/enquiries", async (req, res) => {
-  try {
-    const { 
-      page = 1, 
-      limit = 10, 
-      solarType, // Filter by solar type instead of form type
-      status = 'all',
-      sortBy = 'created_at',
-      sortOrder = 'DESC'
-    } = req.query;
-
-    const offset = (page - 1) * limit;
-    
-    // Build WHERE clause
-    let whereClause = "WHERE 1=1";
-    const queryParams = [];
-    
-    if (solarType && solarType !== 'all') {
-      whereClause += " AND solar_type = ?";
-      queryParams.push(solarType);
-    }
-    
-    if (status && status !== 'all') {
-      whereClause += " AND status = ?";
-      queryParams.push(status);
-    }
-
-    // Get total count
-    const [countResult] = await pool.query(
-      `SELECT COUNT(*) as total FROM enquiries ${whereClause}`,
-      queryParams
-    );
-    const totalRecords = countResult[0].total;
-
-    // Get enquiries with pagination
-    const [rows] = await pool.query(
-      `SELECT 
-        id,
-        first_name,
-        last_name,
-        email,
-        phone,
-        solar_service,
-        solar_type,
-        details,
-        status,
-        created_at,
-        updated_at
-      FROM enquiries 
-      ${whereClause}
-      ORDER BY ${sortBy} ${sortOrder}
-      LIMIT ? OFFSET ?`,
-      [...queryParams, parseInt(limit), parseInt(offset)]
-    );
-
-    // Get solar type statistics
-    const [statsResult] = await pool.query(`
-      SELECT 
-        solar_type,
-        COUNT(*) as count,
-        COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending,
-        COUNT(CASE WHEN status = 'contacted' THEN 1 END) as contacted,
-        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed
-      FROM enquiries 
-      GROUP BY solar_type
-      ORDER BY count DESC
-    `);
-
-    res.json({
-      success: true,
-      data: rows,
-      pagination: {
-        currentPage: parseInt(page),
-        totalPages: Math.ceil(totalRecords / limit),
-        totalRecords,
-        recordsPerPage: parseInt(limit)
-      },
-      statistics: statsResult
-    });
-
-  } catch (err) {
-    console.error("Error fetching enquiries:", err);
-    res.status(500).json({ 
-      success: false, 
-      message: "Failed to fetch enquiries" 
-    });
-  }
-});
-
-// API: Get single enquiry by ID
-app.get("/api/enquiry/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    const [rows] = await pool.query(
-      "SELECT * FROM enquiries WHERE id = ?",
-      [id]
-    );
-    
-    if (rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Enquiry not found"
-      });
-    }
-    
-    res.json({
-      success: true,
-      data: rows[0]
-    });
-    
-  } catch (err) {
-    console.error("Error fetching enquiry:", err);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch enquiry"
-    });
-  }
-});
-
-// API: Update enquiry status
-app.patch("/api/enquiry/:id/status", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status, notes } = req.body;
-    
-    // Validate status
-    const validStatuses = ['pending', 'contacted', 'in_progress', 'completed', 'cancelled'];
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid status value"
-      });
-    }
-    
-    const [result] = await pool.query(
-      `UPDATE enquiries 
-       SET status = ?, admin_notes = ?, updated_at = NOW() 
-       WHERE id = ?`,
-      [status, notes, id]
-    );
-    
-    if (result.affectedRows === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Enquiry not found"
-      });
-    }
-    
-    res.json({
-      success: true,
-      message: "Status updated successfully"
-    });
-    
-  } catch (err) {
-    console.error("Error updating enquiry status:", err);
-    res.status(500).json({
-      success: false,
-      message: "Failed to update status"
-    });
-  }
-});
-
-// API: Delete enquiry
-app.delete("/api/enquiry/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    const [result] = await pool.query(
-      "DELETE FROM enquiries WHERE id = ?",
-      [id]
-    );
-    
-    if (result.affectedRows === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Enquiry not found"
-      });
-    }
-    
-    res.json({
-      success: true,
-      message: "Enquiry deleted successfully"
-    });
-    
-  } catch (err) {
-    console.error("Error deleting enquiry:", err);
-    res.status(500).json({
-      success: false,
-      message: "Failed to delete enquiry"
-    });
-  }
-});
-
-// API: Get solar types and their configurations
-app.get("/api/solar-types", async (req, res) => {
-  try {
-    const solarTypes = {
-      'residential': {
-        name: 'Residential Solar',
-        fields: ['firstName', 'lastName', 'email', 'phone', 'solarService', 'solarType', 'enquiryDetails'],
-        description: 'For home solar installations'
-      },
-      'commercial': {
-        name: 'Commercial Solar',
-        fields: ['firstName', 'lastName', 'email', 'phone', 'companyName', 'solarService', 'enquiryDetails'],
-        description: 'For business solar solutions'
-      },
-      'industrial': {
-        name: 'Industrial Solar',
-        fields: ['firstName', 'lastName', 'email', 'phone', 'companyName', 'capacity', 'enquiryDetails'],
-        description: 'For large-scale industrial solar projects'
-      },
-      'maintenance': {
-        name: 'Solar Maintenance',
-        fields: ['firstName', 'lastName', 'email', 'phone', 'existingSystem', 'issueDescription'],
-        description: 'For solar system maintenance and repairs'
-      },
-      'consultation': {
-        name: 'Free Consultation',
-        fields: ['firstName', 'lastName', 'email', 'phone', 'propertyType', 'enquiryDetails'],
-        description: 'For solar consultation requests'
-      }
-    };
-    
-    res.json({
-      success: true,
-      data: solarTypes
-    });
-    
-  } catch (err) {
-    console.error("Error fetching solar types:", err);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch solar types"
-    });
-  }
-});
-
-
-// get customer order
-app.get("/customer/api/order/:email", async (req, res) => {
-  try {
-    const customerEmail = req.params.email;
     const conn = await mysql2Promise.createConnection(banerjeeConfig);
-
-    const query = `
-      SELECT 
-          o.order_id AS id, 
-          CONCAT(p.first_name, ' ', p.last_name) AS customer,
-          o.delivery_date AS date,
-          o.status,
-          o.email_id,
-          p.phone_number,
-          p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
-          o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
-          o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
-      FROM Orders o
-      LEFT JOIN profiles p ON o.email_id = p.email_address
-      WHERE o.email_id = ?
-      ORDER BY o.order_id DESC
-    `;
-
-    const [results] = await conn.execute(query, [customerEmail]);
-
-    const formatted = await Promise.all(
-      results.map(async (order) => {
-        const productIds = [
-          order.pid_1,
-          order.pid_2,
-          order.pid_3,
-          order.pid_4,
-          order.pid_5,
-          order.pid_6,
-          order.pid_7,
-          order.pid_8,
-          order.pid_9,
-          order.pid_10,
-        ].filter((pid) => pid);
-
-        let total_amount = 0;
-        let products = [];
-
-        for (const pid of productIds) {
-          const [itemId, quantity] = pid.split("-");
-          const [itemRows] = await conn.execute(
-            `SELECT PID, name, price, imglink AS image FROM All_Items WHERE PID = ?`,
-            [itemId]
-          );
-
-          if (itemRows.length > 0) {
-            const product = itemRows[0];
-            const qty = parseInt(quantity) || 1;
-            const price = parseFloat(product.price) || 0;
-
-            total_amount += price * qty;
-
-            products.push({
-              id: product.PID,
-              name: product.name,
-              image: product.image,
-              price: price.toFixed(2),
-              quantity: qty,
-              subtotal: (price * qty).toFixed(2),
-            });
-          }
-        }
-
-        const inferSource = () => {
-          for (let pid of productIds) {
-            if (pid.startsWith("2")) return "Electrical";
-            if (pid.startsWith("1")) return "Electronics";
-          }
-          return "Unknown";
-        };
-
-        return {
-          id: `ORD${String(order.id).padStart(3, "0")}`,
-          customer: order.customer || "Unknown",
-          phone: order.phone_number || "",
-          date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
-          amount: total_amount.toFixed(2),
-          status: order.status || "Pending",
-          source: inferSource(),
-          email_id: order.email_id || "Unknown",
-          shipping_address: {
-            address_line1: order.address_line_1 || "",
-            address_line2: order.address_line_2 || "",
-            city: order.city || "",
-            state: order.state || "",
-            postal_code: order.postal_code || "",
-            country: order.country || "",
-          },
-          products: products,
-        };
-      })
+    await conn.execute(
+      `INSERT INTO ConsultationRequests 
+        (first_name, last_name, email, phone, company, service, message, submission_date, status) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), 'Pending')`,
+      [firstName, lastName, email, phone, formname, service, details]
     );
 
+    // Don't forget to close the connection
     await conn.end();
 
-    res.json({
-      status: "success",
-      count: formatted.length,
-      orders: formatted,
-      timestamp: new Date().toISOString(),
-    });
+    res.status(201).json({ success: true, message: "Enquiry submitted successfully" });
   } catch (err) {
-    console.error(
-      `[${new Date().toISOString()}] ❌ Error fetching orders for ${req.params.email}:`,
-      err
-    );
-    res.status(500).json({
-      status: "error",
-      message: "Failed to fetch orders",
-      details: err.message,
-      timestamp: new Date().toISOString(),
-    });
+    res.status(500).json({ success: false, message: "Error saving enquiry", error: err.message });
+  }
+})
+
+// Admin: Get all enquiries
+app.get("/admin/enquiries", async (req, res) => {
+  try {
+    const conn = await mysql2Promise.createConnection(banerjeeConfig);
+    const [rows] = await conn.execute(`
+      SELECT 
+        request_id as id,
+        first_name as firstName,
+        last_name as lastName,
+        email,
+        phone,
+        company as formName,
+        service,
+        message as details,
+        submission_date as submittedAt,
+        status
+      FROM ConsultationRequests 
+      ORDER BY submission_date DESC
+    `);
+    
+    // Close the connection
+    await conn.end();
+    
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Error fetching enquiries", error: err.message });
   }
 });
+
+// Admin: Update enquiry status
+app.put("/admin/enquiries/:id/status", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    // Check if status is provided
+    if (!status) {
+      return res.status(400).json({ success: false, message: "Status is required" });
+    }
+
+    const validStatuses = ["Pending", "In Progress", "Completed"];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Invalid status. Valid statuses are: ${validStatuses.join(", ")}`,
+        receivedStatus: status
+      });
+    }
+
+    const conn = await mysql2Promise.createConnection(banerjeeConfig);
+    
+    // Using 'request_id' as the actual database column name
+    const [result] = await conn.execute(
+      "UPDATE ConsultationRequests SET status = ? WHERE request_id = ?",
+      [status, id]
+    );
+
+    // Close the connection
+    await conn.end();
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: "Enquiry not found" });
+    }
+
+    res.json({ success: true, message: "Status updated successfully" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Error updating status", error: err.message });
+  }
+});
+
 
 
 // Shop Admin Item Upload Routes (Banerjee DB)
