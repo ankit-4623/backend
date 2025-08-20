@@ -1964,6 +1964,440 @@ app.get("/customer/api/orders/:orderId", async (req, res) => {
   }
 });
 
+// get order by user email
+
+app.get("/customer/api/orders/email/:emailId", async (req, res) => {
+  let conn;
+  try {
+    const { emailId } = req.params;
+
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(emailId)) {
+      return res.status(400).json({
+        status: "error",
+        message: "Invalid email format",
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Use connection pool
+    conn = await pool.getConnection();
+
+    // Fetch all orders for the email with profile info (optimized with single query)
+    const ordersQuery = `
+      SELECT 
+        o.order_id AS id,
+        CONCAT(COALESCE(p.first_name, ''), ' ', COALESCE(p.last_name, '')) AS customer,
+        p.first_name,
+        p.last_name,
+        p.phone_number,
+        o.delivery_date AS date,
+        o.status,
+        o.email_id,
+        p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
+        o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
+        o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
+      FROM Orders o
+      LEFT JOIN profiles p ON o.email_id = p.email_address
+      WHERE o.email_id = ?
+      ORDER BY o.order_id DESC
+    `;
+
+    const [orderResults] = await conn.execute(ordersQuery, [emailId]);
+
+    if (orderResults.length === 0) {
+      return res.status(404).json({
+        status: "error",
+        message: "No orders found for this email",
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Extract ALL unique product IDs from ALL orders for batch fetching
+    const allProductIds = new Set();
+    
+    orderResults.forEach(order => {
+      const productIds = [
+        order.pid_1, order.pid_2, order.pid_3, order.pid_4, order.pid_5,
+        order.pid_6, order.pid_7, order.pid_8, order.pid_9, order.pid_10,
+      ].filter(pid => pid && pid.toString().trim() !== "");
+
+      productIds.forEach(pid => {
+        const [itemId] = pid.toString().split("-");
+        if (itemId) {
+          allProductIds.add(itemId);
+        }
+      });
+    });
+
+    // Batch fetch ALL products in ONE query (MAJOR PERFORMANCE BOOST)
+    let productsMap = {};
+    
+    if (allProductIds.size > 0) {
+      const uniqueItemIds = Array.from(allProductIds);
+      const placeholders = uniqueItemIds.map(() => '?').join(',');
+      const productsQuery = `
+        SELECT PID, name, price, imglink AS image, category, description, subcat
+        FROM All_Items 
+        WHERE PID IN (${placeholders})
+      `;
+
+      const [productResults] = await conn.execute(productsQuery, uniqueItemIds);
+
+      // Create product lookup map for O(1) access
+      productResults.forEach(product => {
+        productsMap[product.PID] = product;
+      });
+    }
+
+    // Process each order
+    const processedOrders = orderResults.map(order => {
+      // Extract product IDs for this order
+      const productIds = [
+        order.pid_1, order.pid_2, order.pid_3, order.pid_4, order.pid_5,
+        order.pid_6, order.pid_7, order.pid_8, order.pid_9, order.pid_10,
+      ].filter(pid => pid && pid.toString().trim() !== "");
+
+      let total_amount = 0;
+      const products = [];
+
+      // Process products for this order
+      productIds.forEach(pid => {
+        const [itemId, quantity] = pid.toString().split("-");
+        const product = productsMap[itemId];
+
+        if (product) {
+          const qty = parseInt(quantity) || 1;
+          const price = parseFloat(product.price) || 0;
+          const subtotal = price * qty;
+          total_amount += subtotal;
+
+          // Determine source based on PID prefix
+          let source = "Unknown";
+          if (itemId.startsWith("2")) source = "Electrical";
+          else if (itemId.startsWith("1")) source = "Electronics";
+
+          products.push({
+            id: product.PID,
+            name: product.name || "Unknown Product",
+            image: product.image || "",
+            price: price.toFixed(2),
+            quantity: qty,
+            subtotal: subtotal.toFixed(2),
+            source: source,
+            category: product.category || "",
+            description: product.description || "",
+            subcat: product.subcat || ""
+          });
+        }
+      });
+
+      // Return processed order
+      return {
+        id: `ORD${String(order.id).padStart(3, "0")}`,
+        customer: order.customer && order.customer.trim() !== " " ? order.customer.trim() : "Unknown",
+        phone: order.phone_number || "",
+        date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
+        amount: total_amount.toFixed(2),
+        status: order.status || "Pending",
+        email_id: order.email_id || "",
+        customer_details: {
+          first_name: order.first_name || "",
+          last_name: order.last_name || "",
+          phone: order.phone_number || "",
+          email: order.email_id || ""
+        },
+        shipping_address: {
+          address_line1: order.address_line_1 || "",
+          address_line2: order.address_line_2 || "",
+          city: order.city || "",
+          state: order.state || "",
+          postal_code: order.postal_code || "",
+          country: order.country || "",
+        },
+        products: products,
+        products_count: products.length,
+        order_summary: {
+          subtotal: total_amount.toFixed(2),
+          tax: "0.00",
+          shipping: "0.00",
+          total: total_amount.toFixed(2)
+        }
+      };
+    });
+
+    // Calculate summary statistics
+    const totalOrders = processedOrders.length;
+    const totalAmount = processedOrders.reduce((sum, order) => sum + parseFloat(order.amount), 0);
+    const totalProducts = processedOrders.reduce((sum, order) => sum + order.products_count, 0);
+
+    // Group orders by status for quick overview
+    const ordersByStatus = processedOrders.reduce((acc, order) => {
+      const status = order.status.toLowerCase();
+      acc[status] = (acc[status] || 0) + 1;
+      return acc;
+    }, {});
+
+    res.json({
+      status: "success",
+      email: emailId,
+      orders: processedOrders,
+      summary: {
+        total_orders: totalOrders,
+        total_amount: totalAmount.toFixed(2),
+        total_products: totalProducts,
+        orders_by_status: ordersByStatus
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] ❌ Customer orders by email error:`, err);
+    
+    // Different error responses based on error type
+    if (err.code === 'ECONNREFUSED') {
+      return res.status(503).json({
+        status: "error",
+        message: "Database connection failed",
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    if (err.code === 'ER_NO_SUCH_TABLE') {
+      return res.status(500).json({
+        status: "error",
+        message: "Database schema error",
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    if (err.code === 'ER_BAD_FIELD_ERROR') {
+      return res.status(500).json({
+        status: "error",
+        message: "Database column error - please contact support",
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    res.status(500).json({
+      status: "error",
+      message: "Internal Server Error",
+      details: process.env.NODE_ENV === 'development' ? err.message : "An unexpected error occurred",
+      timestamp: new Date().toISOString(),
+    });
+
+  } finally {
+    // Always release connection back to pool
+    if (conn) {
+      try {
+        conn.release();
+      } catch (releaseErr) {
+        console.error("Error releasing connection:", releaseErr);
+      }
+    }
+  }
+});
+
+// Add pagination support for users with many orders
+// app.get("/customer/api/orders/email/:emailId/paginated", async (req, res) => {
+//   let conn;
+//   try {
+//     const { emailId } = req.params;
+//     const page = parseInt(req.query.page) || 1;
+//     const limit = parseInt(req.query.limit) || 10;
+//     const offset = (page - 1) * limit;
+
+//     // Basic email validation
+//     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+//     if (!emailRegex.test(emailId)) {
+//       return res.status(400).json({
+//         status: "error",
+//         message: "Invalid email format",
+//         timestamp: new Date().toISOString()
+//       });
+//     }
+
+//     conn = await pool.getConnection();
+
+//     // Get total count for pagination
+//     const countQuery = `SELECT COUNT(*) as total FROM Orders WHERE email_id = ?`;
+//     const [countResult] = await conn.execute(countQuery, [emailId]);
+//     const totalOrders = countResult[0].total;
+
+//     // Fetch paginated orders
+//     const ordersQuery = `
+//       SELECT 
+//         o.order_id AS id,
+//         CONCAT(COALESCE(p.first_name, ''), ' ', COALESCE(p.last_name, '')) AS customer,
+//         p.first_name,
+//         p.last_name,
+//         p.phone_number,
+//         o.delivery_date AS date,
+//         o.status,
+//         o.email_id,
+//         p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
+//         o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
+//         o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10,
+//         o.created_at
+//       FROM Orders o
+//       LEFT JOIN profiles p ON o.email_id = p.email_address
+//       WHERE o.email_id = ?
+//       ORDER BY o.created_at DESC, o.order_id DESC
+//       LIMIT ? OFFSET ?
+//     `;
+
+//     const [orderResults] = await conn.execute(ordersQuery, [emailId, limit, offset]);
+
+//     if (orderResults.length === 0 && page === 1) {
+//       return res.status(404).json({
+//         status: "error",
+//         message: "No orders found for this email",
+//         timestamp: new Date().toISOString()
+//       });
+//     }
+
+//     // Process orders (same logic as above but for paginated results)
+//     const allProductIds = new Set();
+    
+//     orderResults.forEach(order => {
+//       const productIds = [
+//         order.pid_1, order.pid_2, order.pid_3, order.pid_4, order.pid_5,
+//         order.pid_6, order.pid_7, order.pid_8, order.pid_9, order.pid_10,
+//       ].filter(pid => pid && pid.toString().trim() !== "");
+
+//       productIds.forEach(pid => {
+//         const [itemId] = pid.toString().split("-");
+//         if (itemId) allProductIds.add(itemId);
+//       });
+//     });
+
+//     let productsMap = {};
+    
+//     if (allProductIds.size > 0) {
+//       const uniqueItemIds = Array.from(allProductIds);
+//       const placeholders = uniqueItemIds.map(() => '?').join(',');
+//       const productsQuery = `
+//         SELECT PID, name, price, imglink AS image, category, description, subcat
+//         FROM All_Items 
+//         WHERE PID IN (${placeholders})
+//       `;
+
+//       const [productResults] = await conn.execute(productsQuery, uniqueItemIds);
+//       productResults.forEach(product => {
+//         productsMap[product.PID] = product;
+//       });
+//     }
+
+//     const processedOrders = orderResults.map(order => {
+//       const productIds = [
+//         order.pid_1, order.pid_2, order.pid_3, order.pid_4, order.pid_5,
+//         order.pid_6, order.pid_7, order.pid_8, order.pid_9, order.pid_10,
+//       ].filter(pid => pid && pid.toString().trim() !== "");
+
+//       let total_amount = 0;
+//       const products = [];
+
+//       productIds.forEach(pid => {
+//         const [itemId, quantity] = pid.toString().split("-");
+//         const product = productsMap[itemId];
+
+//         if (product) {
+//           const qty = parseInt(quantity) || 1;
+//           const price = parseFloat(product.price) || 0;
+//           const subtotal = price * qty;
+//           total_amount += subtotal;
+
+//           let source = "Unknown";
+//           if (itemId.startsWith("2")) source = "Electrical";
+//           else if (itemId.startsWith("1")) source = "Electronics";
+
+//           products.push({
+//             id: product.PID,
+//             name: product.name || "Unknown Product",
+//             image: product.image || "",
+//             price: price.toFixed(2),
+//             quantity: qty,
+//             subtotal: subtotal.toFixed(2),
+//             source: source,
+//             category: product.category || "",
+//             description: product.description || "",
+//             subcat: product.subcat || ""
+//           });
+//         }
+//       });
+
+//       return {
+//         id: `ORD${String(order.id).padStart(3, "0")}`,
+//         customer: order.customer && order.customer.trim() !== " " ? order.customer.trim() : "Unknown",
+//         phone: order.phone_number || "",
+//         date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
+//         created_at: order.created_at ? new Date(order.created_at).toISOString() : "",
+//         amount: total_amount.toFixed(2),
+//         status: order.status || "Pending",
+//         email_id: order.email_id || "",
+//         customer_details: {
+//           first_name: order.first_name || "",
+//           last_name: order.last_name || "",
+//           phone: order.phone_number || "",
+//           email: order.email_id || ""
+//         },
+//         shipping_address: {
+//           address_line1: order.address_line_1 || "",
+//           address_line2: order.address_line_2 || "",
+//           city: order.city || "",
+//           state: order.state || "",
+//           postal_code: order.postal_code || "",
+//           country: order.country || "",
+//         },
+//         products: products,
+//         products_count: products.length,
+//         order_summary: {
+//           subtotal: total_amount.toFixed(2),
+//           tax: "0.00",
+//           shipping: "0.00",
+//           total: total_amount.toFixed(2)
+//         }
+//       };
+//     });
+
+//     const totalPages = Math.ceil(totalOrders / limit);
+
+//     res.json({
+//       status: "success",
+//       email: emailId,
+//       orders: processedOrders,
+//       pagination: {
+//         current_page: page,
+//         total_pages: totalPages,
+//         total_orders: totalOrders,
+//         per_page: limit,
+//         has_next: page < totalPages,
+//         has_prev: page > 1
+//       },
+//       timestamp: new Date().toISOString()
+//     });
+
+//   } catch (err) {
+//     console.error(`[${new Date().toISOString()}] ❌ Paginated orders error:`, err);
+    
+//     res.status(500).json({
+//       status: "error",
+//       message: "Internal Server Error",
+//       details: process.env.NODE_ENV === 'development' ? err.message : "An unexpected error occurred",
+//       timestamp: new Date().toISOString(),
+//     });
+
+//   } finally {
+//     if (conn) {
+//       try {
+//         conn.release();
+//       } catch (releaseErr) {
+//         console.error("Error releasing connection:", releaseErr);
+//       }
+//     }
+//   }
+// });
 // query
 
 // API: Submit enquiry with form type
