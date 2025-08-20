@@ -2463,13 +2463,36 @@ app.post("/api/enquiries", async (req, res) => {
   try {
     const { firstName, lastName, email, phone, service, type, details, formname } = req.body;
 
+    const conn = await mysql2Promise.createConnection(banerjeeConfig);
+
+    // Check if user has any existing non-completed enquiries
+    const [existingEnquiries] = await conn.execute(
+      `SELECT request_id, status FROM ConsultationRequests 
+       WHERE email = ? AND status IN ('Pending', 'In Progress')
+       ORDER BY submission_date DESC
+       LIMIT 1`,
+      [email]
+    );
+
+    if (existingEnquiries.length > 0) {
+      await conn.end();
+      return res.status(400).json({ 
+        success: false, 
+        message: "You already have a pending enquiry. Please wait for it to be completed before submitting a new one.",
+        existingEnquiry: {
+          id: existingEnquiries[0].request_id,
+          status: existingEnquiries[0].status
+        }
+      });
+    }
+
     // Format the message more cleanly
     let message = details || '';
     if (type) {
       message = `Solar Type: ${type}\n${message}`;
     }
 
-    const conn = await mysql2Promise.createConnection(banerjeeConfig);
+    // Insert new enquiry
     await conn.execute(
       `INSERT INTO ConsultationRequests 
         (first_name, last_name, email, phone, company, service, message, submission_date, status) 
@@ -2479,9 +2502,17 @@ app.post("/api/enquiries", async (req, res) => {
 
     await conn.end();
 
-    res.status(201).json({ success: true, message: "Enquiry submitted successfully" });
+    res.status(201).json({ 
+      success: true, 
+      message: "Enquiry submitted successfully" 
+    });
+
   } catch (err) {
-    res.status(500).json({ success: false, message: "Error saving enquiry", error: err.message });
+    res.status(500).json({ 
+      success: false, 
+      message: "Error saving enquiry", 
+      error: err.message 
+    });
   }
 });
 
