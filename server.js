@@ -2402,29 +2402,7 @@ app.get("/customer/api/orders/email/:emailId", async (req, res) => {
 
 // query
 
-
-app.post("/api/enquiries", async (req, res) => {
-  try {
-    const { firstName, lastName, email, phone, service, solarType, details, formname } = req.body;
-
-    const conn = await mysql2Promise.createConnection(banerjeeConfig);
-    await conn.execute(
-      `INSERT INTO ConsultationRequests 
-        (first_name, last_name, email, phone, company, service, message, submission_date, status) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), 'Pending')`,
-      [firstName, lastName, email, phone, formname, service, details]
-    );
-
-    // Don't forget to close the connection
-    await conn.end();
-
-    res.status(201).json({ success: true, message: "Enquiry submitted successfully" });
-  } catch (err) {
-    res.status(500).json({ success: false, message: "Error saving enquiry", error: err.message });
-  }
-})
-
-// Admin: Get all enquiries
+// get query
 app.get("/admin/enquiries", async (req, res) => {
   try {
     const conn = await mysql2Promise.createConnection(banerjeeConfig);
@@ -2437,21 +2415,76 @@ app.get("/admin/enquiries", async (req, res) => {
         phone,
         company as formName,
         service,
-        message as details,
+        message as rawDetails,
         submission_date as submittedAt,
         status
       FROM ConsultationRequests 
       ORDER BY submission_date DESC
     `);
     
-    // Close the connection
     await conn.end();
     
-    res.json(rows);
+    // Parse the details to separate type and actual details
+    const processedRows = rows.map(row => {
+      let type = '';
+      let details = row.rawDetails || '';
+      
+      // Check if details contains "Solar Type: " pattern
+      const typeMatch = details.match(/Solar Type:\s*([^\n]*)/i);
+      if (typeMatch) {
+        type = typeMatch[1].trim();
+        // Remove the solar type line from details
+        details = details.replace(/Solar Type:\s*[^\n]*\n?/i, '').trim();
+      }
+      
+      return {
+        id: row.id,
+        firstName: row.firstName,
+        lastName: row.lastName,
+        email: row.email,
+        phone: row.phone,
+        formName: row.formName,
+        service: row.service,
+        details: details,
+        type: type,
+        submittedAt: row.submittedAt,
+        status: row.status
+      };
+    });
+    
+    res.json(processedRows);
   } catch (err) {
     res.status(500).json({ success: false, message: "Error fetching enquiries", error: err.message });
   }
 });
+
+// post query
+app.post("/api/enquiries", async (req, res) => {
+  try {
+    const { firstName, lastName, email, phone, service, type, details, formname } = req.body;
+
+    // Format the message more cleanly
+    let message = details || '';
+    if (type) {
+      message = `Solar Type: ${type}\n${message}`;
+    }
+
+    const conn = await mysql2Promise.createConnection(banerjeeConfig);
+    await conn.execute(
+      `INSERT INTO ConsultationRequests 
+        (first_name, last_name, email, phone, company, service, message, submission_date, status) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), 'Pending')`,
+      [firstName, lastName, email, phone, formname, service, message]
+    );
+
+    await conn.end();
+
+    res.status(201).json({ success: true, message: "Enquiry submitted successfully" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Error saving enquiry", error: err.message });
+  }
+});
+
 
 // Admin: Update enquiry status
 app.put("/admin/enquiries/:id/status", async (req, res) => {
