@@ -1736,19 +1736,10 @@ app.get("/api/orders/:email/:orderId", async (req, res) => {
 // get single order
 app.post("/submit-order", async (req, res) => {
   const { email, cart, paymentId, orderId, signature, totalAmount } = req.body;
-  
-  if (
-    !email ||
-    !cart ||
-    !Array.isArray(cart) ||
-    !paymentId ||
-    !orderId ||
-    !signature ||
-    !totalAmount
-  ) {
-    console.warn(
-      `[${new Date().toISOString()}] ❌ Missing required fields in /submit-order request`
-    );
+
+  // Basic validation
+  if (!email || !cart || !Array.isArray(cart) || !paymentId || !orderId || !signature || !totalAmount) {
+    console.warn(`[${new Date().toISOString()}] ❌ Missing required fields`);
     return res.status(400).json({
       status: "error",
       message: "Email, cart, paymentId, orderId, signature, and totalAmount are required",
@@ -1756,15 +1747,10 @@ app.post("/submit-order", async (req, res) => {
     });
   }
 
-  // Additional validation for cart items with quantities
-  const invalidCartItems = cart.filter(item => 
-    !item.id || !item.quantity || item.quantity <= 0 || !Number.isInteger(item.quantity)
-  );
-  
+  // Validate cart items
+  const invalidCartItems = cart.filter(item => !item.id || !Number.isInteger(item.quantity) || item.quantity <= 0);
   if (invalidCartItems.length > 0) {
-    console.warn(
-      `[${new Date().toISOString()}] ❌ Invalid cart items with missing or invalid quantities`
-    );
+    console.warn(`[${new Date().toISOString()}] ❌ Invalid cart items`);
     return res.status(400).json({
       status: "error",
       message: "All cart items must have valid product ID and positive integer quantity",
@@ -1772,17 +1758,16 @@ app.post("/submit-order", async (req, res) => {
     });
   }
 
+  let conn;
   try {
-    const conn = await mysql2Promise.createConnection(banerjeeConfig);
-    
+    conn = await mysql2Promise.createConnection(banerjeeConfig);
+
     // Verify email exists
     const [profileRows] = await conn.execute(
       `SELECT email_address FROM profiles WHERE email_address = ?`,
       [email]
     );
-    
     if (profileRows.length === 0) {
-      await conn.end();
       console.warn(`[${new Date().toISOString()}] ❌ Invalid email: ${email}`);
       return res.status(400).json({
         status: "error",
@@ -1791,17 +1776,14 @@ app.post("/submit-order", async (req, res) => {
       });
     }
 
-    // Verify payment signature
+    // Verify Razorpay payment signature
     const generatedSignature = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
       .update(`${orderId}|${paymentId}`)
       .digest("hex");
-      
+
     if (generatedSignature !== signature) {
-      await conn.end();
-      console.warn(
-        `[${new Date().toISOString()}] ❌ Payment verification failed for order: ${orderId}`
-      );
+      console.warn(`[${new Date().toISOString()}] ❌ Payment verification failed for order: ${orderId}`);
       return res.status(400).json({
         status: "error",
         message: "Invalid payment signature",
@@ -1809,47 +1791,37 @@ app.post("/submit-order", async (req, res) => {
       });
     }
 
-    // Convert cart array to JSON string for database storage
+    // Insert order into Orders table
     const cartString = JSON.stringify(cart);
-    
-    // Insert order with JSON cart data
     const [orderResult] = await conn.execute(
-      `INSERT INTO orders (email, cart, paymentId, orderId, signature, totalAmount, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending', NOW())`,
-      [email, cartString, paymentId, orderId, signature, totalAmount]
+      `INSERT INTO Orders (email_id, cart, status, amount) 
+       VALUES (?, ?, 'pending', ?)`,
+      [email, cartString, totalAmount]
     );
 
-    await conn.end();
-
-    // Log successful order with quantity details
+    // Log order summary
     const orderSummary = cart.map(item => `${item.id}(qty:${item.quantity})`).join(', ');
-    console.log(
-      `[${new Date().toISOString()}] ✅ Order created successfully: ORD${String(orderResult.insertId).padStart(3, "0")} - Items: ${orderSummary}`
-    );
+    console.log(`[${new Date().toISOString()}] ✅ Order created: ORD${String(orderResult.insertId).padStart(3, "0")} - Items: ${orderSummary}`);
 
     res.json({
       status: "success",
       orderId: `ORD${String(orderResult.insertId).padStart(3, "0")}`,
       paymentId,
-      items: cart.map(item => ({
-        productId: item.id,
-        quantity: item.quantity
-      })),
+      items: cart.map(item => ({ productId: item.id, quantity: item.quantity })),
       totalAmount,
       timestamp: new Date().toISOString(),
     });
-    
+
   } catch (err) {
-    console.error(
-      `[${new Date().toISOString()}] ❌ Error submitting order:`,
-      err
-    );
+    console.error(`[${new Date().toISOString()}] ❌ Error submitting order:`, err);
     res.status(500).json({
       status: "error",
       message: "Order submission failed",
       details: err.message,
       timestamp: new Date().toISOString(),
     });
+  } finally {
+    if (conn) await conn.end();
   }
 });
 
