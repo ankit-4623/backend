@@ -950,7 +950,7 @@ app.post("/complete-profile", async (req, res) => {
 
 app.get("/customer/api/orders/:email/invoice/:orderId", async (req, res) => {
   const { email, orderId } = req.params;
-
+  
   const numericOrderId = parseInt(orderId.replace(/^ORD/, ""), 10);
   if (isNaN(numericOrderId)) {
     return res.status(400).json({ message: "Invalid orderId format" });
@@ -972,8 +972,7 @@ app.get("/customer/api/orders/:email/invoice/:orderId", async (req, res) => {
         o.email_id,
         o.amount,
         p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
-        o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
-        o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
+        o.cart
       FROM Orders o
       LEFT JOIN profiles p ON o.email_id = p.email_address
       WHERE o.email_id = ? AND o.order_id = ?
@@ -993,18 +992,29 @@ app.get("/customer/api/orders/:email/invoice/:orderId", async (req, res) => {
       return res.status(403).json({ message: "Invoice only available after delivery" });
     }
 
-    // Collect product IDs
-    const productIds = [
-      order.pid_1, order.pid_2, order.pid_3, order.pid_4, order.pid_5,
-      order.pid_6, order.pid_7, order.pid_8, order.pid_9, order.pid_10
-    ].filter(Boolean);
+    // Parse cart JSON
+    let cartItems = [];
+    try {
+      cartItems = order.cart ? JSON.parse(order.cart) : [];
+    } catch (parseError) {
+      console.error("❌ Error parsing cart JSON:", parseError);
+      return res.status(500).json({ message: "Invalid cart data format" });
+    }
+
+    if (!Array.isArray(cartItems)) {
+      return res.status(500).json({ message: "Cart data is not in valid format" });
+    }
 
     const products = [];
 
-    for (const pid of productIds) {
-      const parts = pid.split("-");
-      const itemId = parts[0];
-      const qty = parseInt(parts[1], 10) || 1;
+    // Process each cart item
+    for (const cartItem of cartItems) {
+      const { id: itemId, quantity } = cartItem;
+      
+      if (!itemId || !quantity) {
+        console.warn("⚠️ Skipping invalid cart item:", cartItem);
+        continue;
+      }
 
       const [itemRows] = await pool.execute(
         "SELECT PID, name, price, imglink AS image FROM All_Items WHERE PID = ? LIMIT 1",
@@ -1014,6 +1024,7 @@ app.get("/customer/api/orders/:email/invoice/:orderId", async (req, res) => {
       if (itemRows.length > 0) {
         const product = itemRows[0];
         const price = parseFloat(product.price) || 0;
+        const qty = parseInt(quantity, 10) || 1;
 
         products.push({
           id: product.PID,
@@ -1023,8 +1034,15 @@ app.get("/customer/api/orders/:email/invoice/:orderId", async (req, res) => {
           quantity: qty,
           subtotal: (price * qty).toFixed(2),
         });
+      } else {
+        console.warn(`⚠️ Product not found for ID: ${itemId}`);
       }
     }
+
+    // Calculate total from products (for verification)
+    const calculatedTotal = products.reduce((sum, product) => {
+      return sum + parseFloat(product.subtotal);
+    }, 0);
 
     // Prepare invoice object
     const invoiceOrder = {
@@ -1033,6 +1051,7 @@ app.get("/customer/api/orders/:email/invoice/:orderId", async (req, res) => {
       phone: order.phone_number || "",
       date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
       amount: parseFloat(order.amount || 0).toFixed(2), // Use DB amount
+      calculatedAmount: calculatedTotal.toFixed(2), // For verification
       status: order.status,
       email_id: order.email_id,
       shipping_address: {
@@ -1045,8 +1064,6 @@ app.get("/customer/api/orders/:email/invoice/:orderId", async (req, res) => {
       },
       products,
     };
-
-  
 
     generateInvoice(invoiceOrder, res);
 
@@ -1515,90 +1532,133 @@ app.post("/verify-payment", (req, res) => {
   }
 });
 
-app.post("/submit-order", async (req, res) => {
-  const { email, cart, paymentId, orderId, signature, totalAmount } = req.body;
-  if (
-    !email ||
-    !cart ||
-    !Array.isArray(cart) ||
-    !paymentId ||
-    !orderId ||
-    !signature ||
-    !totalAmount
-  ) {
-    console.warn(
-      `[${new Date().toISOString()}] ❌ Missing required fields in /submit-order request`
-    );
-    return res.status(400).json({
-      status: "error",
-      message:
-        "Email, cart, paymentId, orderId, signature, and totalAmount are required",
-      timestamp: new Date().toISOString(),
-    });
-  }
-  try {
-    const conn = await mysql2Promise.createConnection(banerjeeConfig);
-    const [profileRows] = await conn.execute(
-      `SELECT email_address FROM profiles WHERE email_address = ?`,
-      [email]
-    );
-    if (profileRows.length === 0) {
-      await conn.end();
-      console.warn(`[${new Date().toISOString()}] ❌ Invalid email: ${email}`);
-      return res.status(400).json({
-        status: "error",
-        message: "Invalid email: No matching profile found",
-        timestamp: new Date().toISOString(),
-      });
-    }
-    const generatedSignature = crypto
-      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
-      .update(`${orderId}|${paymentId}`)
-      .digest("hex");
-    if (generatedSignature !== signature) {
-      await conn.end();
-      console.warn(
-        `[${new Date().toISOString()}] ❌ Payment verification failed for order: ${orderId}`
-      );
-      return res.status(400).json({
-        status: "error",
-        message: "Invalid payment signature",
-        timestamp: new Date().toISOString(),
-      });
-    }
-    const pidFields = Array.from({ length: 10 }, (_, i) => `pid_${i + 1}`).join(
-      ", "
-    );
-    const pidValues = Array(10).fill(null);
-    cart.slice(0, 10).forEach((item, index) => {
-      pidValues[index] = `${item.id}-${item.quantity}`;
-    });
-    const placeholders = pidValues.map(() => "?").join(", ");
-  const [orderResult] = await conn.execute(
-  `INSERT INTO Orders (email_id, ${pidFields}, amount, status) 
-   VALUES (?, ${placeholders}, ?, 'pending')`,
-  [email, ...pidValues, totalAmount]   
-);
-    await conn.end();
-    res.json({
-      status: "success",
-      orderId: `ORD${String(orderResult.insertId).padStart(3, "0")}`,
-      paymentId,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (err) {
-    console.error(
-      `[${new Date().toISOString()}] ❌ Error submitting order:`,
-      err
-    );
-    res.status(500).json({
-      status: "error",
-      message: "Order submission failed",
-      details: err.message,
-      timestamp: new Date().toISOString(),
-    });
-  }
-});
+// app.post("/submit-order", async (req, res) => {
+//   const { email, cart, paymentId, orderId, signature, totalAmount } = req.body;
+  
+//   if (
+//     !email ||
+//     !cart ||
+//     !Array.isArray(cart) ||
+//     !paymentId ||
+//     !orderId ||
+//     !signature ||
+//     !totalAmount
+//   ) {
+//     console.warn(
+//       `[${new Date().toISOString()}] ❌ Missing required fields in /submit-order request`
+//     );
+//     return res.status(400).json({
+//       status: "error",
+//       message:
+//         "Email, cart, paymentId, orderId, signature, and totalAmount are required",
+//       timestamp: new Date().toISOString(),
+//     });
+//   }
+
+//   // Additional validation for cart items with quantities
+//   const invalidCartItems = cart.filter(item => 
+//     !item.id || !item.quantity || item.quantity <= 0 || !Number.isInteger(item.quantity)
+//   );
+  
+//   if (invalidCartItems.length > 0) {
+//     console.warn(
+//       `[${new Date().toISOString()}] ❌ Invalid cart items with missing or invalid quantities`
+//     );
+//     return res.status(400).json({
+//       status: "error",
+//       message: "All cart items must have valid product ID and positive integer quantity",
+//       timestamp: new Date().toISOString(),
+//     });
+//   }
+
+//   try {
+//     const conn = await mysql2Promise.createConnection(banerjeeConfig);
+    
+//     // Verify email exists
+//     const [profileRows] = await conn.execute(
+//       `SELECT email_address FROM profiles WHERE email_address = ?`,
+//       [email]
+//     );
+    
+//     if (profileRows.length === 0) {
+//       await conn.end();
+//       console.warn(`[${new Date().toISOString()}] ❌ Invalid email: ${email}`);
+//       return res.status(400).json({
+//         status: "error",
+//         message: "Invalid email: No matching profile found",
+//         timestamp: new Date().toISOString(),
+//       });
+//     }
+
+//     // Verify payment signature
+//     const generatedSignature = crypto
+//       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+//       .update(`${orderId}|${paymentId}`)
+//       .digest("hex");
+      
+//     if (generatedSignature !== signature) {
+//       await conn.end();
+//       console.warn(
+//         `[${new Date().toISOString()}] ❌ Payment verification failed for order: ${orderId}`
+//       );
+//       return res.status(400).json({
+//         status: "error",
+//         message: "Invalid payment signature",
+//         timestamp: new Date().toISOString(),
+//       });
+//     }
+
+//     // Prepare product data with quantities
+//     const pidFields = Array.from({ length: 10 }, (_, i) => `pid_${i + 1}`).join(", ");
+//     const pidValues = Array(10).fill(null);
+    
+//     // Store product ID and quantity (limited to first 10 items)
+//     cart.slice(0, 10).forEach((item, index) => {
+//       pidValues[index] = `${item.id}-${item.quantity}`;
+//     });
+    
+//     const placeholders = pidValues.map(() => "?").join(", ");
+
+//     // Insert order with product quantities
+//     const [orderResult] = await conn.execute(
+//       `INSERT INTO Orders (email_id, ${pidFields}, amount, status, created_at)
+//        VALUES (?, ${placeholders}, ?, 'pending', NOW())`,
+//       [email, ...pidValues, totalAmount]
+//     );
+
+//     await conn.end();
+
+//     // Log successful order with quantity details
+//     const orderSummary = cart.map(item => `${item.id}(qty:${item.quantity})`).join(', ');
+//     console.log(
+//       `[${new Date().toISOString()}] ✅ Order created successfully: ORD${String(orderResult.insertId).padStart(3, "0")} - Items: ${orderSummary}`
+//     );
+
+//     res.json({
+//       status: "success",
+//       orderId: `ORD${String(orderResult.insertId).padStart(3, "0")}`,
+//       paymentId,
+//       items: cart.map(item => ({
+//         productId: item.id,
+//         quantity: item.quantity
+//       })),
+//       totalAmount,
+//       timestamp: new Date().toISOString(),
+//     });
+    
+//   } catch (err) {
+//     console.error(
+//       `[${new Date().toISOString()}] ❌ Error submitting order:`,
+//       err
+//     );
+//     res.status(500).json({
+//       status: "error",
+//       message: "Order submission failed",
+//       details: err.message,
+//       timestamp: new Date().toISOString(),
+//     });
+//   }
+// });
 
 const pool = mysql2Promise.createPool(banerjeeConfig);
 
@@ -1628,15 +1688,15 @@ app.get("/api/orders", async (req, res) => {
     
     if (search) {
       whereClause += whereClause ? ' AND' : ' WHERE';
-      whereClause += ' (CONCAT(p.first_name, " ", p.last_name) LIKE ? OR o.email_id LIKE ? OR o.order_id LIKE ?)';
+      whereClause += ' (CONCAT(p.first_name, " ", p.last_name) LIKE ? OR o.email LIKE ? OR o.id LIKE ?)';
       queryParams.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
 
     // Get total count for pagination
     const countQuery = `
       SELECT COUNT(*) as total
-      FROM Orders o
-      LEFT JOIN profiles p ON o.email_id = p.email_address
+      FROM orders o
+      LEFT JOIN profiles p ON o.email = p.email_address
       ${whereClause}
     `;
     
@@ -1644,22 +1704,23 @@ app.get("/api/orders", async (req, res) => {
     const totalOrders = countResult[0].total;
     const totalPages = Math.ceil(totalOrders / limit);
 
-    // Main query with pagination
+    // Main query with pagination - now includes cart JSON column
     const query = `
       SELECT 
-        o.order_id AS id,
-        CONCAT(p.first_name, ' ', p.last_name) AS customer,
-        o.delivery_date AS date,
+        o.id,
+        CONCAT(COALESCE(p.first_name, ''), ' ', COALESCE(p.last_name, '')) AS customer,
+        o.created_at AS date,
         o.status,
-        o.email_id,
-        o.amount, 
-        p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
-        o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
-        o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
-      FROM Orders o
-      LEFT JOIN profiles p ON o.email_id = p.email_address
+        o.email,
+        o.totalAmount AS amount,
+        o.cart,
+        o.paymentId,
+        o.orderId as razorpayOrderId,
+        p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country
+      FROM orders o
+      LEFT JOIN profiles p ON o.email = p.email_address
       ${whereClause}
-      ORDER BY o.order_id DESC
+      ORDER BY o.id DESC
       LIMIT ? OFFSET ?
     `;
 
@@ -1682,20 +1743,19 @@ app.get("/api/orders", async (req, res) => {
       });
     }
 
-    // Collect all unique product IDs from all orders
+    // Collect all unique product IDs from all orders' cart JSON
     const allProductIds = [];
     results.forEach(order => {
-      const productIds = [
-        order.pid_1, order.pid_2, order.pid_3, order.pid_4, order.pid_5,
-        order.pid_6, order.pid_7, order.pid_8, order.pid_9, order.pid_10,
-      ].filter(pid => pid);
-      
-      productIds.forEach(pid => {
-        const [itemId] = pid.split("-");
-        if (!allProductIds.includes(itemId)) {
-          allProductIds.push(itemId);
-        }
-      });
+      try {
+        const cart = JSON.parse(order.cart || '[]');
+        cart.forEach(item => {
+          if (item.id && !allProductIds.includes(item.id)) {
+            allProductIds.push(item.id);
+          }
+        });
+      } catch (parseErr) {
+        console.warn(`Failed to parse cart for order ${order.id}:`, parseErr);
+      }
     });
 
     // Fetch all products in one query
@@ -1703,7 +1763,7 @@ app.get("/api/orders", async (req, res) => {
     if (allProductIds.length > 0) {
       const placeholders = allProductIds.map(() => '?').join(',');
       const productsQuery = `
-        SELECT PID, name, price, imglink AS image 
+        SELECT PID, name, price, imglink AS image, category, description, subcat
         FROM All_Items 
         WHERE PID IN (${placeholders})
       `;
@@ -1718,57 +1778,88 @@ app.get("/api/orders", async (req, res) => {
 
     // Process orders with the fetched products
     const formatted = results.map(order => {
-      const productIds = [
-        order.pid_1, order.pid_2, order.pid_3, order.pid_4, order.pid_5,
-        order.pid_6, order.pid_7, order.pid_8, order.pid_9, order.pid_10,
-      ].filter(pid => pid);
-
+      let cart = [];
       let total_amount = 0;
       let products = [];
 
-      productIds.forEach(pid => {
-        const [itemId, quantity] = pid.split("-");
-        const product = productsMap[itemId];
+      // Parse cart JSON
+      try {
+        cart = JSON.parse(order.cart || '[]');
+      } catch (parseErr) {
+        console.warn(`Failed to parse cart for order ${order.id}:`, parseErr);
+        cart = [];
+      }
+
+      // Process each item in the cart
+      cart.forEach(item => {
+        const product = productsMap[item.id];
         
         if (product) {
-          const qty = parseInt(quantity) || 1;
+          const qty = parseInt(item.quantity) || 1;
           const price = parseFloat(product.price) || 0;
-          total_amount += price * qty;
+          const subtotal = price * qty;
+          total_amount += subtotal;
 
-          // Determine source per product
+          // Determine source based on product ID prefix
           let source = "Unknown";
-          if (itemId.startsWith("2")) source = "Electrical";
-          else if (itemId.startsWith("1")) source = "Electronics";
+          if (item.id.startsWith("2")) source = "Electrical";
+          else if (item.id.startsWith("1")) source = "Electronics";
 
           products.push({
             id: product.PID,
-            name: product.name,
-            image: product.image,
+            name: product.name || "Unknown Product",
+            image: product.image || "",
             price: price.toFixed(2),
             quantity: qty,
-            subtotal: (price * qty).toFixed(2),
+            subtotal: subtotal.toFixed(2),
             source: source,
+            category: product.category || "",
+            description: product.description || "",
+            subcat: product.subcat || ""
+          });
+        } else {
+          // Handle case where product is not found
+          console.warn(`Product not found: ${item.id} in order ${order.id}`);
+          products.push({
+            id: item.id,
+            name: "Product Not Found",
+            image: "",
+            price: "0.00",
+            quantity: parseInt(item.quantity) || 1,
+            subtotal: "0.00",
+            source: "Unknown",
+            category: "",
+            description: "",
+            subcat: ""
           });
         }
       });
 
-      // Infer order source from first product
+      // Infer order source from first product in cart
       const inferSource = () => {
-        for (let pid of productIds) {
-          if (pid.startsWith("2")) return "Electrical";
-          if (pid.startsWith("1")) return "Electronics";
+        if (cart.length > 0) {
+          const firstProductId = cart[0].id;
+          if (firstProductId.startsWith("2")) return "Electrical";
+          if (firstProductId.startsWith("1")) return "Electronics";
         }
         return "Unknown";
       };
 
       return {
         id: `ORD${String(order.id).padStart(3, "0")}`,
-        customer: order.customer || "Unknown",
+        customer: order.customer && order.customer.trim() !== " " ? order.customer.trim() : "Unknown",
         date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
-       amount: order.amount ? parseFloat(order.amount).toFixed(2) : "0.00",
-        status: order.status || "Pending",
+        amount: order.amount ? parseFloat(order.amount).toFixed(2) : total_amount.toFixed(2),
+        status: order.status || "pending",
         source: inferSource(),
-        email_id: order.email_id || "Unknown",
+        email: order.email || "Unknown",
+        paymentId: order.paymentId || "",
+        razorpayOrderId: order.razorpayOrderId || "",
+        customer_details: {
+          first_name: order.customer ? order.customer.split(' ')[0] : "",
+          last_name: order.customer ? order.customer.split(' ').slice(1).join(' ') : "",
+          email: order.email || ""
+        },
         shipping_address: {
           address_line1: order.address_line_1 || "",
           address_line2: order.address_line_2 || "",
@@ -1778,6 +1869,14 @@ app.get("/api/orders", async (req, res) => {
           country: order.country || "",
         },
         products: products,
+        products_count: products.length,
+        total_items: products.reduce((sum, product) => sum + product.quantity, 0),
+        order_summary: {
+          subtotal: total_amount.toFixed(2),
+          tax: "0.00",
+          shipping: "0.00",
+          total: total_amount.toFixed(2)
+        }
       };
     });
 
@@ -1796,6 +1895,12 @@ app.get("/api/orders", async (req, res) => {
       filters: {
         status: status || 'all',
         search: search || ''
+      },
+      summary: {
+        totalOrders,
+        totalPages,
+        currentPage: page,
+        ordersOnPage: formatted.length
       },
       timestamp: new Date().toISOString(),
     });
@@ -1820,65 +1925,185 @@ app.get("/api/orders", async (req, res) => {
 });
 
 // get single order
+app.post("/submit-order", async (req, res) => {
+  const { email, cart, paymentId, orderId, signature, totalAmount } = req.body;
+  
+  if (
+    !email ||
+    !cart ||
+    !Array.isArray(cart) ||
+    !paymentId ||
+    !orderId ||
+    !signature ||
+    !totalAmount
+  ) {
+    console.warn(
+      `[${new Date().toISOString()}] ❌ Missing required fields in /submit-order request`
+    );
+    return res.status(400).json({
+      status: "error",
+      message: "Email, cart, paymentId, orderId, signature, and totalAmount are required",
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  // Additional validation for cart items with quantities
+  const invalidCartItems = cart.filter(item => 
+    !item.id || !item.quantity || item.quantity <= 0 || !Number.isInteger(item.quantity)
+  );
+  
+  if (invalidCartItems.length > 0) {
+    console.warn(
+      `[${new Date().toISOString()}] ❌ Invalid cart items with missing or invalid quantities`
+    );
+    return res.status(400).json({
+      status: "error",
+      message: "All cart items must have valid product ID and positive integer quantity",
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  try {
+    const conn = await mysql2Promise.createConnection(banerjeeConfig);
+    
+    // Verify email exists
+    const [profileRows] = await conn.execute(
+      `SELECT email_address FROM profiles WHERE email_address = ?`,
+      [email]
+    );
+    
+    if (profileRows.length === 0) {
+      await conn.end();
+      console.warn(`[${new Date().toISOString()}] ❌ Invalid email: ${email}`);
+      return res.status(400).json({
+        status: "error",
+        message: "Invalid email: No matching profile found",
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Verify payment signature
+    const generatedSignature = crypto
+      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+      .update(`${orderId}|${paymentId}`)
+      .digest("hex");
+      
+    if (generatedSignature !== signature) {
+      await conn.end();
+      console.warn(
+        `[${new Date().toISOString()}] ❌ Payment verification failed for order: ${orderId}`
+      );
+      return res.status(400).json({
+        status: "error",
+        message: "Invalid payment signature",
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Convert cart array to JSON string for database storage
+    const cartString = JSON.stringify(cart);
+    
+    // Insert order with JSON cart data
+    const [orderResult] = await conn.execute(
+      `INSERT INTO orders (email, cart, paymentId, orderId, signature, totalAmount, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'pending', NOW())`,
+      [email, cartString, paymentId, orderId, signature, totalAmount]
+    );
+
+    await conn.end();
+
+    // Log successful order with quantity details
+    const orderSummary = cart.map(item => `${item.id}(qty:${item.quantity})`).join(', ');
+    console.log(
+      `[${new Date().toISOString()}] ✅ Order created successfully: ORD${String(orderResult.insertId).padStart(3, "0")} - Items: ${orderSummary}`
+    );
+
+    res.json({
+      status: "success",
+      orderId: `ORD${String(orderResult.insertId).padStart(3, "0")}`,
+      paymentId,
+      items: cart.map(item => ({
+        productId: item.id,
+        quantity: item.quantity
+      })),
+      totalAmount,
+      timestamp: new Date().toISOString(),
+    });
+    
+  } catch (err) {
+    console.error(
+      `[${new Date().toISOString()}] ❌ Error submitting order:`,
+      err
+    );
+    res.status(500).json({
+      status: "error",
+      message: "Order submission failed",
+      details: err.message,
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
+// Fetch Order Details Endpoint - Retrieves orders with parsed quantities
+// Get specific order by ID with JSON cart support
 app.get("/customer/api/orders/:orderId", async (req, res) => {
-  let conn;
   try {
     const { orderId } = req.params;
 
-    // Convert "ORD038" -> 38 (numeric) or handle plain numeric IDs
+    // Convert "ORD038" -> 38 (numeric)
     const numericOrderId = parseInt(orderId.replace(/^ORD/, ""), 10);
     
     if (isNaN(numericOrderId)) {
       return res.status(400).json({
         status: "error",
-        message: "Invalid orderId format. Use ORDxxx or numeric ID",
-        timestamp: new Date().toISOString()
+        message: "Invalid orderId format"
       });
     }
 
-    // Use connection pool instead of creating new connection
-    conn = await pool.getConnection();
+    const pool = mysql2Promise.createPool(banerjeeConfig);
 
-    // Fetch order + profile info
-    const orderQuery = `
+    // Fetch order + profile info from new orders table with JSON cart
+    const [orderResults] = await pool.execute(`
       SELECT 
-        o.order_id AS id,
+        o.id,
         CONCAT(COALESCE(p.first_name, ''), ' ', COALESCE(p.last_name, '')) AS customer,
         p.first_name,
         p.last_name,
         p.phone_number,
-        o.delivery_date AS date,
+        o.created_at AS date,
         o.status,
-        o.email_id,
-        o.amount, 
-        p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
-        o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
-        o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
-      FROM Orders o
-      LEFT JOIN profiles p ON o.email_id = p.email_address
-      WHERE o.order_id = ?
+        o.email,
+        o.totalAmount AS amount,
+        o.cart,
+        o.paymentId,
+        o.orderId as razorpayOrderId,
+        o.signature,
+        p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country
+      FROM orders o
+      LEFT JOIN profiles p ON o.email = p.email_address
+      WHERE o.id = ?
       LIMIT 1
-    `;
-
-    const [orderResults] = await conn.execute(orderQuery, [numericOrderId]);
+    `, [numericOrderId]);
 
     if (orderResults.length === 0) {
       return res.status(404).json({
         status: "error",
-        message: "Order not found",
-        timestamp: new Date().toISOString()
+        message: "Order not found"
       });
     }
 
     const order = orderResults[0];
 
-    // Extract and validate product IDs
-    const productIds = [
-      order.pid_1, order.pid_2, order.pid_3, order.pid_4, order.pid_5,
-      order.pid_6, order.pid_7, order.pid_8, order.pid_9, order.pid_10,
-    ].filter(pid => pid && pid.toString().trim() !== "");
+    // Parse cart JSON
+    let cart = [];
+    try {
+      cart = JSON.parse(order.cart || '[]');
+    } catch (parseErr) {
+      console.warn(`Failed to parse cart for order ${order.id}:`, parseErr);
+      cart = [];
+    }
 
-    if (productIds.length === 0) {
+    if (cart.length === 0) {
       return res.json({
         status: "success",
         order: {
@@ -1887,77 +2112,58 @@ app.get("/customer/api/orders/:orderId", async (req, res) => {
           phone: order.phone_number || "",
           date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
           amount: order.amount ? parseFloat(order.amount).toFixed(2) : "0.00",
-          status: order.status || "Pending",
-          email_id: order.email_id || "",
-          customer_details: {
-            first_name: order.first_name || "",
-            last_name: order.last_name || "",
-            phone: order.phone_number || "",
-            email: order.email_id || ""
-          },
-          shipping_address: {
-            address_line1: order.address_line_1 || "",
-            address_line2: order.address_line_2 || "",
-            city: order.city || "",
-            state: order.state || "",
-            postal_code: order.postal_code || "",
-            country: order.country || "",
-          },
+          status: order.status || "pending",
+          email: order.email || "",
+          paymentId: order.paymentId || "",
+          razorpayOrderId: order.razorpayOrderId || "",
           products: [],
-          products_count: 0,
-          order_summary: {
-            subtotal: "0.00",
-            tax: "0.00",
-            shipping: "0.00",
-            total: "0.00"
-          }
-        },
-        timestamp: new Date().toISOString()
+          products_count: 0
+        }
       });
     }
 
+    // Debug: Log the cart data
+    console.log("Cart data from database:", cart);
+
     // Extract unique item IDs for batch fetching
-    const uniqueItemIds = [];
-    
-    productIds.forEach(pid => {
-      const [itemId] = pid.toString().split("-");
-      if (itemId && !uniqueItemIds.includes(itemId)) {
-        uniqueItemIds.push(itemId);
-      }
-    });
+    const uniqueItemIds = [...new Set(cart.map(item => item.id).filter(id => id))];
+
+    console.log("Unique item IDs:", uniqueItemIds); // Debug log
 
     let productsMap = {};
     
-    // Only fetch products if we have valid item IDs
+    // Batch fetch all products
     if (uniqueItemIds.length > 0) {
-      // Batch fetch all products in one query (MAJOR OPTIMIZATION)
       const placeholders = uniqueItemIds.map(() => '?').join(',');
-      const productsQuery = `
+      const [productResults] = await pool.execute(`
         SELECT PID, name, price, imglink AS image, category, description, subcat
         FROM All_Items 
         WHERE PID IN (${placeholders})
-      `;
+      `, uniqueItemIds);
 
-      const [productResults] = await conn.execute(productsQuery, uniqueItemIds);
-
-      // Create product lookup map for O(1) access
+      // Create product lookup map
       productResults.forEach(product => {
         productsMap[product.PID] = product;
       });
+
+      console.log("Products found:", Object.keys(productsMap)); // Debug log
     }
 
-    // Build products array with calculated totals
+    // Build products array with correct quantities from cart JSON
     let total_amount = 0;
     const products = [];
 
-    productIds.forEach(pid => {
-      const [itemId, quantity] = pid.toString().split("-");
+    cart.forEach(item => {
+      const itemId = item.id;
+      const quantity = parseInt(item.quantity) || 1;
+      
+      console.log(`Processing cart item: ID="${itemId}", quantity="${quantity}"`); // Debug log
+      
       const product = productsMap[itemId];
 
       if (product) {
-        const qty = parseInt(quantity) || 1;
         const price = parseFloat(product.price) || 0;
-        const subtotal = price * qty;
+        const subtotal = price * quantity;
         total_amount += subtotal;
 
         // Determine source based on PID prefix
@@ -1970,16 +2176,30 @@ app.get("/customer/api/orders/:orderId", async (req, res) => {
           name: product.name || "Unknown Product",
           image: product.image || "",
           price: price.toFixed(2),
-          quantity: qty,
+          quantity: quantity, // Direct from cart JSON
           subtotal: subtotal.toFixed(2),
           source: source,
           category: product.category || "",
           description: product.description || "",
           subcat: product.subcat || ""
         });
+
+        console.log(`Added product: ${product.name}, quantity: ${quantity}`); // Debug log
       } else {
-        // Log missing products for debugging
         console.warn(`Product not found: ${itemId}`);
+        // Still add to products array but with placeholder data
+        products.push({
+          id: itemId,
+          name: "Product Not Found",
+          image: "",
+          price: "0.00",
+          quantity: quantity,
+          subtotal: "0.00",
+          source: "Unknown",
+          category: "",
+          description: "",
+          subcat: ""
+        });
       }
     });
 
@@ -1989,14 +2209,17 @@ app.get("/customer/api/orders/:orderId", async (req, res) => {
       customer: order.customer && order.customer.trim() !== " " ? order.customer.trim() : "Unknown",
       phone: order.phone_number || "",
       date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
-      amount: order.amount ? parseFloat(order.amount).toFixed(2) : "0.00",
-      status: order.status || "Pending",
-      email_id: order.email_id || "",
+      amount: order.amount ? parseFloat(order.amount).toFixed(2) : total_amount.toFixed(2),
+      status: order.status || "pending",
+      email: order.email || "",
+      paymentId: order.paymentId || "",
+      razorpayOrderId: order.razorpayOrderId || "",
+      signature: order.signature || "",
       customer_details: {
         first_name: order.first_name || "",
         last_name: order.last_name || "",
         phone: order.phone_number || "",
-        email: order.email_id || ""
+        email: order.email || ""
       },
       shipping_address: {
         address_line1: order.address_line_1 || "",
@@ -2008,69 +2231,31 @@ app.get("/customer/api/orders/:orderId", async (req, res) => {
       },
       products: products,
       products_count: products.length,
+      total_items: products.reduce((sum, product) => sum + product.quantity, 0),
       order_summary: {
         subtotal: total_amount.toFixed(2),
-        tax: "0.00", // Add tax calculation if needed
-        shipping: "0.00", // Add shipping calculation if needed
+        tax: "0.00",
+        shipping: "0.00",
         total: total_amount.toFixed(2)
       }
     };
 
     res.json({
       status: "success",
-      order: orderDetails,
-      timestamp: new Date().toISOString()
+      order: orderDetails
     });
 
-  } catch (err) {
-    console.error(`[${new Date().toISOString()}] ❌ Customer order details error:`, err);
-    
-    // Different error responses based on error type
-    if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({
-        status: "error",
-        message: "Database connection failed",
-        timestamp: new Date().toISOString()
-      });
-    }
-
-    if (err.code === 'ER_NO_SUCH_TABLE') {
-      return res.status(500).json({
-        status: "error",
-        message: "Database schema error",
-        timestamp: new Date().toISOString()
-      });
-    }
-
-    if (err.code === 'ER_BAD_FIELD_ERROR') {
-      return res.status(500).json({
-        status: "error",
-        message: "Database column error - please contact support",
-        timestamp: new Date().toISOString()
-      });
-    }
-
+  } catch (error) {
+    console.error("Order details error:", error);
     res.status(500).json({
       status: "error",
       message: "Internal Server Error",
-      details: process.env.NODE_ENV === 'development' ? err.message : "An unexpected error occurred",
-      timestamp: new Date().toISOString(),
+      timestamp: new Date().toISOString()
     });
-
-  } finally {
-    // Always release connection back to pool
-    if (conn) {
-      try {
-        conn.release();
-      } catch (releaseErr) {
-        console.error("Error releasing connection:", releaseErr);
-      }
-    }
   }
 });
 
-// get order by user email
-
+// Get orders by user email with JSON cart support
 app.get("/customer/api/orders/email/:emailId", async (req, res) => {
   let conn;
   try {
@@ -2089,25 +2274,27 @@ app.get("/customer/api/orders/email/:emailId", async (req, res) => {
     // Use connection pool
     conn = await pool.getConnection();
 
-    // Fetch all orders for the email with profile info (optimized with single query)
+    // Fetch all orders for the email with profile info from new orders table
     const ordersQuery = `
       SELECT 
-        o.order_id AS id,
+        o.id,
         CONCAT(COALESCE(p.first_name, ''), ' ', COALESCE(p.last_name, '')) AS customer,
         p.first_name,
         p.last_name,
         p.phone_number,
-        o.delivery_date AS date,
+        o.created_at AS date,
         o.status,
-        o.email_id,
-        o.amount, 
-        p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
-        o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
-        o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
-      FROM Orders o
-      LEFT JOIN profiles p ON o.email_id = p.email_address
-      WHERE o.email_id = ?
-      ORDER BY o.order_id DESC
+        o.email,
+        o.totalAmount AS amount,
+        o.cart,
+        o.paymentId,
+        o.orderId as razorpayOrderId,
+        o.signature,
+        p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country
+      FROM orders o
+      LEFT JOIN profiles p ON o.email = p.email_address
+      WHERE o.email = ?
+      ORDER BY o.id DESC
     `;
 
     const [orderResults] = await conn.execute(ordersQuery, [emailId]);
@@ -2120,21 +2307,20 @@ app.get("/customer/api/orders/email/:emailId", async (req, res) => {
       });
     }
 
-    // Extract ALL unique product IDs from ALL orders for batch fetching
+    // Extract ALL unique product IDs from ALL orders' cart JSON for batch fetching
     const allProductIds = new Set();
     
     orderResults.forEach(order => {
-      const productIds = [
-        order.pid_1, order.pid_2, order.pid_3, order.pid_4, order.pid_5,
-        order.pid_6, order.pid_7, order.pid_8, order.pid_9, order.pid_10,
-      ].filter(pid => pid && pid.toString().trim() !== "");
-
-      productIds.forEach(pid => {
-        const [itemId] = pid.toString().split("-");
-        if (itemId) {
-          allProductIds.add(itemId);
-        }
-      });
+      try {
+        const cart = JSON.parse(order.cart || '[]');
+        cart.forEach(item => {
+          if (item.id) {
+            allProductIds.add(item.id);
+          }
+        });
+      } catch (parseErr) {
+        console.warn(`Failed to parse cart for order ${order.id}:`, parseErr);
+      }
     });
 
     // Batch fetch ALL products in ONE query (MAJOR PERFORMANCE BOOST)
@@ -2159,24 +2345,27 @@ app.get("/customer/api/orders/email/:emailId", async (req, res) => {
 
     // Process each order
     const processedOrders = orderResults.map(order => {
-      // Extract product IDs for this order
-      const productIds = [
-        order.pid_1, order.pid_2, order.pid_3, order.pid_4, order.pid_5,
-        order.pid_6, order.pid_7, order.pid_8, order.pid_9, order.pid_10,
-      ].filter(pid => pid && pid.toString().trim() !== "");
+      // Parse cart JSON for this order
+      let cart = [];
+      try {
+        cart = JSON.parse(order.cart || '[]');
+      } catch (parseErr) {
+        console.warn(`Failed to parse cart for order ${order.id}:`, parseErr);
+        cart = [];
+      }
 
       let total_amount = 0;
       const products = [];
 
-      // Process products for this order
-      productIds.forEach(pid => {
-        const [itemId, quantity] = pid.toString().split("-");
+      // Process products for this order from cart JSON
+      cart.forEach(item => {
+        const itemId = item.id;
+        const quantity = parseInt(item.quantity) || 1;
         const product = productsMap[itemId];
 
         if (product) {
-          const qty = parseInt(quantity) || 1;
           const price = parseFloat(product.price) || 0;
-          const subtotal = price * qty;
+          const subtotal = price * quantity;
           total_amount += subtotal;
 
           // Determine source based on PID prefix
@@ -2189,12 +2378,27 @@ app.get("/customer/api/orders/email/:emailId", async (req, res) => {
             name: product.name || "Unknown Product",
             image: product.image || "",
             price: price.toFixed(2),
-            quantity: qty,
+            quantity: quantity,
             subtotal: subtotal.toFixed(2),
             source: source,
             category: product.category || "",
             description: product.description || "",
             subcat: product.subcat || ""
+          });
+        } else {
+          // Handle missing product
+          console.warn(`Product not found: ${itemId} in order ${order.id}`);
+          products.push({
+            id: itemId,
+            name: "Product Not Found",
+            image: "",
+            price: "0.00",
+            quantity: quantity,
+            subtotal: "0.00",
+            source: "Unknown",
+            category: "",
+            description: "",
+            subcat: ""
           });
         }
       });
@@ -2205,14 +2409,16 @@ app.get("/customer/api/orders/email/:emailId", async (req, res) => {
         customer: order.customer && order.customer.trim() !== " " ? order.customer.trim() : "Unknown",
         phone: order.phone_number || "",
         date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
-        amount: order.amount ? parseFloat(order.amount).toFixed(2) : "0.00",
-        status: order.status || "Pending",
-        email_id: order.email_id || "",
+        amount: order.amount ? parseFloat(order.amount).toFixed(2) : total_amount.toFixed(2),
+        status: order.status || "pending",
+        email: order.email || "",
+        paymentId: order.paymentId || "",
+        razorpayOrderId: order.razorpayOrderId || "",
         customer_details: {
           first_name: order.first_name || "",
           last_name: order.last_name || "",
           phone: order.phone_number || "",
-          email: order.email_id || ""
+          email: order.email || ""
         },
         shipping_address: {
           address_line1: order.address_line_1 || "",
@@ -2224,6 +2430,7 @@ app.get("/customer/api/orders/email/:emailId", async (req, res) => {
         },
         products: products,
         products_count: products.length,
+        total_items: products.reduce((sum, product) => sum + product.quantity, 0),
         order_summary: {
           subtotal: total_amount.toFixed(2),
           tax: "0.00",
@@ -2235,8 +2442,10 @@ app.get("/customer/api/orders/email/:emailId", async (req, res) => {
 
     // Calculate summary statistics
     const totalOrders = processedOrders.length;
-    const totalAmount = processedOrders.reduce((sum, order) => sum + parseFloat(order.amount), 0);
-    const totalProducts = processedOrders.reduce((sum, order) => sum + order.products_count, 0);
+    const totalAmount = processedOrders.reduce((sum, order) => 
+      sum + parseFloat(order.order_summary.total), 0
+    );
+    const totalItems = processedOrders.reduce((sum, order) => sum + order.total_items, 0);
 
     // Group orders by status for quick overview
     const ordersByStatus = processedOrders.reduce((acc, order) => {
@@ -2252,7 +2461,7 @@ app.get("/customer/api/orders/email/:emailId", async (req, res) => {
       summary: {
         total_orders: totalOrders,
         total_amount: totalAmount.toFixed(2),
-        total_products: totalProducts,
+        total_items: totalItems,
         orders_by_status: ordersByStatus
       },
       timestamp: new Date().toISOString()
