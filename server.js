@@ -1064,7 +1064,10 @@ function generateInvoice(order, res) {
 
   // ---------------- RESPONSE HEADERS ----------------
   res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `inline; filename=invoice-${order.id}.pdf`);
+  res.setHeader(
+    "Content-Disposition",
+    `inline; filename=invoice-${order.id}.pdf`
+  );
 
   // ✅ Pipe only once
   doc.pipe(res);
@@ -1088,7 +1091,7 @@ function generateInvoice(order, res) {
     const pageHeight = doc.page.height;
     doc
       .rect(20, 20, pageWidth - 40, pageHeight - 40)
-      .lineWidth(2)
+      .lineWidth(1.5)
       .strokeColor("#1a237e")
       .stroke();
   };
@@ -1099,27 +1102,37 @@ function generateInvoice(order, res) {
   try {
     const logoPath = path.join(process.cwd(), "image", "image.png");
     if (fs.existsSync(logoPath)) {
-      doc.image(logoPath, 40, 35, { width: 70 });
+      doc.image(logoPath, 40, 40, { width: 60 });
     }
   } catch (err) {
     console.error("Logo load error:", err.message);
   }
 
-  const headerX = 120, headerY = 35;
+  const headerX = 115,
+    headerY = 40;
 
   doc
-    .fontSize(14) // smaller heading
+    .fontSize(13) // smaller company heading
     .fillColor("#1a237e")
-    .text("BANERJEE ELECTRONICS & CONSULTANCY SERVICES (BECS)", headerX, headerY);
+    .text(
+      "BANERJEE ELECTRONICS & CONSULTANCY SERVICES (BECS)",
+      headerX,
+      headerY,
+      { width: 400 }
+    );
 
   doc
     .fontSize(8)
     .fillColor("#000")
-    .text("ADDRESS: 70/5 BANERJEE PARA ROAD, KAMALA PARK,", headerX, headerY + 15)
-    .text("SARSUNA, KOLKATA - 700061", headerX, headerY + 25)
-    .text("CONTACT NO: 9830640683", headerX, headerY + 35)
-    .text("GSTIN: 19BKNPB0402R1ZZ", headerX, headerY + 45)
-    .text("2ND FLOOR", headerX, headerY + 55);
+    .text(
+      "ADDRESS: 70/5 BANERJEE PARA ROAD, KAMALA PARK,",
+      headerX,
+      headerY + 14
+    )
+    .text("SARSUNA, KOLKATA - 700061", headerX, headerY + 24)
+    .text("CONTACT NO: 9830640683", headerX, headerY + 34)
+    .text("GSTIN: 19BKNPB0402R1ZZ", headerX, headerY + 44)
+    .text("2ND FLOOR", headerX, headerY + 54);
 
   // Divider
   doc.moveDown(2);
@@ -1130,47 +1143,64 @@ function generateInvoice(order, res) {
     .lineWidth(1)
     .stroke();
 
-  // ---------------- INVOICE TITLE ----------------
-  doc
-    .moveDown(1)
-    .fontSize(12)
-    .fillColor("#000")
-    .text("Invoice", { align: "center" });
+  // ---------------- INVOICE TITLE (PERFECTLY CENTERED) ----------------
+  doc.moveDown(0.3);
+  
+  // Calculate exact center position for "INVOICE" text
+  const pageWidth = doc.page.width;
+  const margins = 40; // left and right margins
+  const availableWidth = pageWidth - (margins * 2);
+  const invoiceText = "INVOICE";
+  
+  doc.fontSize(16).fillColor("#000");
+  const invoiceWidth = doc.widthOfString(invoiceText);
+  const invoiceX = margins + (availableWidth - invoiceWidth) / 2;
+  
+  doc.text(invoiceText, invoiceX, doc.y, { underline: true });
+  doc.moveDown(0.8);
 
-  // ---------------- ORDER INFO ----------------
-  doc.fontSize(10).text(`Invoice ID: ${order.id}`);
-  doc.text(`Date: ${order.date || new Date().toLocaleDateString()}`);
-  doc.text(`Status: ${order.status}`);
-  doc.moveDown();
+  // ---------------- ORDER DETAILS ----------------
+  doc.fontSize(10).fillColor("#1a237e").text("Order Details:", 40, doc.y, { underline: true });
+  doc.fillColor("#000").fontSize(9);
+  const orderY = doc.y;
+  doc.text(`Invoice ID: ${order.id}`, 40, orderY + 12);
+  doc.text(`Date: ${order.date || new Date().toLocaleDateString()}`, 40, orderY + 24);
+  doc.text(`Status: ${order.status}`, 40, orderY + 36);
+  doc.y = orderY + 50;
 
   // ---------------- CUSTOMER DETAILS ----------------
-  doc.fontSize(12).fillColor("#1a237e").text("Customer Details:", { underline: true });
-  doc.fillColor("#000").fontSize(10);
-  doc.text(`Name: ${order.customer}`);
-  doc.text(`Email: ${order.email_id}`);
-  doc.text(`Phone: ${order.phone || ""}`);
-  doc.moveDown();
+  doc.fontSize(10).fillColor("#1a237e").text("Customer Details:", 40, doc.y, { underline: true });
+  doc.fillColor("#000").fontSize(9);
+  const customerY = doc.y;
+  doc.text(`Name: ${order.customer}`, 40, customerY + 12);
+  doc.text(`Email: ${order.email_id}`, 40, customerY + 24);
+  doc.text(`Phone: ${order.phone || ""}`, 40, customerY + 36);
+  doc.y = customerY + 50;
 
-  // ---------------- SHIPPING ----------------
-  doc.fontSize(12).fillColor("#1a237e").text("Shipping Address:", { underline: true });
+  // ---------------- SHIPPING ADDRESS ----------------
+  doc.fontSize(10).fillColor("#1a237e").text("Shipping Address:", 40, doc.y, { underline: true });
   const addr = order.shipping_address || {};
-  doc.fillColor("#000").fontSize(10);
-  doc.text(addr.address_line1 || "");
-  doc.text(addr.address_line2 || "");
-  doc.text(`${addr.city || ""}, ${addr.state || ""}`);
-  doc.text(`${addr.postal_code || ""}, ${addr.country || ""}`);
-  doc.moveDown();
+  doc.fillColor("#000").fontSize(9);
+  const shippingY = doc.y;
+  doc.text(addr.address_line1 || "", 40, shippingY + 12);
+  doc.text(addr.address_line2 || "", 40, shippingY + 24);
+  doc.text(`${addr.city || ""}, ${addr.state || ""}`, 40, shippingY + 36);
+  doc.text(`${addr.postal_code || ""}, ${addr.country || ""}`, 40, shippingY + 48);
+  doc.y = shippingY + 62;
 
   // ---------------- PRODUCTS TABLE ----------------
-  doc.fontSize(12).fillColor("#1a237e").text("Products:", { underline: true });
-  doc.moveDown(0.5);
+  doc.fontSize(10).fillColor("#1a237e").text("Products:", 40, doc.y, { underline: true });
+  doc.y += 15;
 
   const tableTop = doc.y;
-  const itemX = 50, qtyX = 300, priceX = 370, subtotalX = 450;
+  const itemX = 40,
+    qtyX = 280,
+    priceX = 350,
+    subtotalX = 440;
 
   // Header row
-  doc.rect(50, tableTop - 5, 500, 20).fill("#eeeeee").stroke();
-  doc.fillColor("#000").fontSize(10);
+  doc.rect(40, tableTop - 5, 510, 18).fill("#eeeeee").stroke();
+  doc.fillColor("#000").fontSize(9);
   doc.text("Item", itemX, tableTop);
   doc.text("Qty", qtyX, tableTop);
   doc.text("Price", priceX, tableTop);
@@ -1179,18 +1209,18 @@ function generateInvoice(order, res) {
   let productTotal = 0;
 
   order.products.forEach((product, i) => {
-    const y = tableTop + 25 + i * 20;
+    const y = tableTop + 20 + i * 18;
 
     if (i % 2 === 0) {
-      doc.rect(50, y - 5, 500, 20).fill("#f9f9f9").stroke();
+      doc.rect(40, y - 5, 510, 18).fill("#f9f9f9").stroke();
     }
 
     const price = parseFloat(product.price) || 0;
     const quantity = parseFloat(product.quantity) || 1;
-    const subtotal = parseFloat(product.subtotal) || (price * quantity);
+    const subtotal = parseFloat(product.subtotal) || price * quantity;
 
-    doc.fillColor("#000").fontSize(10);
-    doc.text(product.name, itemX, y, { width: 240 });
+    doc.fillColor("#000").fontSize(9);
+    doc.text(product.name, itemX, y, { width: 230 });
     doc.text(quantity.toString(), qtyX, y);
     doc.text(`${INR}${price.toFixed(2)}`, priceX, y);
     doc.text(`${INR}${subtotal.toFixed(2)}`, subtotalX, y);
@@ -1198,21 +1228,27 @@ function generateInvoice(order, res) {
     productTotal += subtotal;
   });
 
-  doc.moveDown(2);
+  doc.moveDown(1.5);
 
   // ---------------- CALCULATIONS ----------------
   const gst = parseFloat((productTotal * 0.18).toFixed(2));
-  const grandTotal = parseFloat(order.amount) || (productTotal + gst);
-  const delivery = parseFloat((grandTotal - (productTotal + gst)).toFixed(2));
+  const grandTotal = parseFloat(order.amount) || productTotal + gst;
+  const delivery = parseFloat(
+    (grandTotal - (productTotal + gst)).toFixed(2)
+  );
 
-  doc.fontSize(10).fillColor("#000");
-  doc.text(`Products Total: ${INR}${productTotal.toFixed(2)}`, { align: "right" });
+  doc.fontSize(9).fillColor("#000");
+  doc.text(`Products Total: ${INR}${productTotal.toFixed(2)}`, {
+    align: "right",
+  });
   doc.text(`GST (18%): ${INR}${gst.toFixed(2)}`, { align: "right" });
-  doc.text(`Delivery Charges: ${INR}${delivery.toFixed(2)}`, { align: "right" });
+  doc.text(`Delivery Charges: ${INR}${delivery.toFixed(2)}`, {
+    align: "right",
+  });
 
   // ---------------- GRAND TOTAL ----------------
   doc.moveDown(0.5);
-  doc.fontSize(14).fillColor("#1a237e").text(
+  doc.fontSize(12).fillColor("#1a237e").text(
     `Grand Total: ${INR}${grandTotal.toFixed(2)}`,
     { align: "right", underline: true }
   );
@@ -1226,7 +1262,7 @@ function generateInvoice(order, res) {
     .strokeColor("#9e9e9e")
     .stroke();
 
-  doc.fontSize(9).fillColor("#616161").text(
+  doc.fontSize(8).fillColor("#616161").text(
     "Banerjee Electronics and Consultancy Services | www.banerjeeconsultancy.com",
     { align: "center" }
   );
@@ -3589,6 +3625,7 @@ app.get(
 );
 
 const { Storage } = require("@google-cloud/storage");
+
 const storage = new Storage({
   keyFilename: "./INSTITUTE/student login/firebase-service-account.json",
 });
