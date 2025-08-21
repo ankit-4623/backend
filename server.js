@@ -1664,265 +1664,74 @@ const pool = mysql2Promise.createPool(banerjeeConfig);
 
  // get all orders by admin
 app.get("/api/orders", async (req, res) => {
-  let conn;
   try {
-    // Pagination parameters
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 50;
-    const offset = (page - 1) * limit;
-    
-    // Optional filters
-    const status = req.query.status;
-    const search = req.query.search;
-    
-    conn = await pool.getConnection();
+    const conn = await mysql2Promise.createConnection(banerjeeConfig);
 
-    // Build WHERE clause for filters
-    let whereClause = '';
-    let queryParams = [];
-    
-    if (status && status !== 'all') {
-      whereClause += ' WHERE o.status = ?';
-      queryParams.push(status);
-    }
-    
-    if (search) {
-      whereClause += whereClause ? ' AND' : ' WHERE';
-      whereClause += ' (CONCAT(p.first_name, " ", p.last_name) LIKE ? OR o.email LIKE ? OR o.id LIKE ?)';
-      queryParams.push(`%${search}%`, `%${search}%`, `%${search}%`);
-    }
+    const [rows] = await conn.execute(
+      `
+      SELECT o.order_id, o.email_id, o.status, o.amount, o.cart,
+             p.first_name, p.last_name, p.phone_number,
+             p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country
+      FROM Orders o
+      LEFT JOIN profiles p ON o.email_id = p.email_address
+      ORDER BY o.order_id DESC
+      `
+    );
 
-    // Get total count for pagination
-    const countQuery = `
-      SELECT COUNT(*) as total
-      FROM orders o
-      LEFT JOIN profiles p ON o.email = p.email_address
-      ${whereClause}
-    `;
-    
-    const [countResult] = await conn.execute(countQuery, queryParams);
-    const totalOrders = countResult[0].total;
-    const totalPages = Math.ceil(totalOrders / limit);
+    await conn.end();
 
-    // Main query with pagination - now includes cart JSON column
-    const query = `
-      SELECT 
-        o.id,
-        CONCAT(COALESCE(p.first_name, ''), ' ', COALESCE(p.last_name, '')) AS customer,
-        o.created_at AS date,
-        o.status,
-        o.email,
-        o.totalAmount AS amount,
-        o.cart,
-        o.paymentId,
-        o.orderId as razorpayOrderId,
-        p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country
-      FROM orders o
-      LEFT JOIN profiles p ON o.email = p.email_address
-      ${whereClause}
-      ORDER BY o.id DESC
-      LIMIT ? OFFSET ?
-    `;
-
-    const [results] = await conn.execute(query, [...queryParams, limit, offset]);
-
-    if (results.length === 0) {
-      return res.json({
-        status: "success",
-        count: 0,
-        orders: [],
-        pagination: {
-          page,
-          limit,
-          totalOrders,
-          totalPages,
-          hasNext: false,
-          hasPrev: false
-        },
-        timestamp: new Date().toISOString(),
-      });
-    }
-
-    // Collect all unique product IDs from all orders' cart JSON
-    const allProductIds = [];
-    results.forEach(order => {
-      try {
-        const cart = JSON.parse(order.cart || '[]');
-        cart.forEach(item => {
-          if (item.id && !allProductIds.includes(item.id)) {
-            allProductIds.push(item.id);
-          }
-        });
-      } catch (parseErr) {
-        console.warn(`Failed to parse cart for order ${order.id}:`, parseErr);
-      }
-    });
-
-    // Fetch all products in one query
-    let productsMap = {};
-    if (allProductIds.length > 0) {
-      const placeholders = allProductIds.map(() => '?').join(',');
-      const productsQuery = `
-        SELECT PID, name, price, imglink AS image, category, description, subcat
-        FROM All_Items 
-        WHERE PID IN (${placeholders})
-      `;
-      
-      const [productResults] = await conn.execute(productsQuery, allProductIds);
-      
-      // Create a map for quick product lookup
-      productResults.forEach(product => {
-        productsMap[product.PID] = product;
-      });
-    }
-
-    // Process orders with the fetched products
-    const formatted = results.map(order => {
-      let cart = [];
-      let total_amount = 0;
-      let products = [];
-
-      // Parse cart JSON
-      try {
-        cart = JSON.parse(order.cart || '[]');
-      } catch (parseErr) {
-        console.warn(`Failed to parse cart for order ${order.id}:`, parseErr);
-        cart = [];
-      }
-
-      // Process each item in the cart
-      cart.forEach(item => {
-        const product = productsMap[item.id];
-        
-        if (product) {
-          const qty = parseInt(item.quantity) || 1;
-          const price = parseFloat(product.price) || 0;
-          const subtotal = price * qty;
-          total_amount += subtotal;
-
-          // Determine source based on product ID prefix
-          let source = "Unknown";
-          if (item.id.startsWith("2")) source = "Electrical";
-          else if (item.id.startsWith("1")) source = "Electronics";
-
-          products.push({
-            id: product.PID,
-            name: product.name || "Unknown Product",
-            image: product.image || "",
-            price: price.toFixed(2),
-            quantity: qty,
-            subtotal: subtotal.toFixed(2),
-            source: source,
-            category: product.category || "",
-            description: product.description || "",
-            subcat: product.subcat || ""
-          });
-        } else {
-          // Handle case where product is not found
-          console.warn(`Product not found: ${item.id} in order ${order.id}`);
-          products.push({
-            id: item.id,
-            name: "Product Not Found",
-            image: "",
-            price: "0.00",
-            quantity: parseInt(item.quantity) || 1,
-            subtotal: "0.00",
-            source: "Unknown",
-            category: "",
-            description: "",
-            subcat: ""
-          });
-        }
-      });
-
-      // Infer order source from first product in cart
-      const inferSource = () => {
-        if (cart.length > 0) {
-          const firstProductId = cart[0].id;
-          if (firstProductId.startsWith("2")) return "Electrical";
-          if (firstProductId.startsWith("1")) return "Electronics";
-        }
-        return "Unknown";
-      };
-
-      return {
-        id: `ORD${String(order.id).padStart(3, "0")}`,
-        customer: order.customer && order.customer.trim() !== " " ? order.customer.trim() : "Unknown",
-        date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
-        amount: order.amount ? parseFloat(order.amount).toFixed(2) : total_amount.toFixed(2),
-        status: order.status || "pending",
-        source: inferSource(),
-        email: order.email || "Unknown",
-        paymentId: order.paymentId || "",
-        razorpayOrderId: order.razorpayOrderId || "",
-        customer_details: {
-          first_name: order.customer ? order.customer.split(' ')[0] : "",
-          last_name: order.customer ? order.customer.split(' ').slice(1).join(' ') : "",
-          email: order.email || ""
-        },
-        shipping_address: {
-          address_line1: order.address_line_1 || "",
-          address_line2: order.address_line_2 || "",
-          city: order.city || "",
-          state: order.state || "",
-          postal_code: order.postal_code || "",
-          country: order.country || "",
-        },
-        products: products,
-        products_count: products.length,
-        total_items: products.reduce((sum, product) => sum + product.quantity, 0),
-        order_summary: {
-          subtotal: total_amount.toFixed(2),
-          tax: "0.00",
-          shipping: "0.00",
-          total: total_amount.toFixed(2)
-        }
-      };
-    });
-
-    res.json({
-      status: "success",
-      count: formatted.length,
-      orders: formatted,
-      pagination: {
-        page,
-        limit,
-        totalOrders,
-        totalPages,
-        hasNext: page < totalPages,
-        hasPrev: page > 1
-      },
-      filters: {
-        status: status || 'all',
-        search: search || ''
-      },
-      summary: {
-        totalOrders,
-        totalPages,
-        currentPage: page,
-        ordersOnPage: formatted.length
-      },
-      timestamp: new Date().toISOString(),
-    });
-
+    res.json({ status: "success", orders: rows });
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] ❌ Error fetching orders:`, err);
+    console.error("❌ Error fetching orders:", err);
     res.status(500).json({
       status: "error",
       message: "Failed to fetch orders",
-      details: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error',
+      details: err.message,
       timestamp: new Date().toISOString(),
     });
-  } finally {
-    if (conn) {
-      try {
-        conn.release(); // Return connection to pool
-      } catch (releaseErr) {
-        console.error("Error releasing connection:", releaseErr);
-      }
-    }
   }
 });
+
+
+// -------------------- GET SINGLE ORDER --------------------
+app.get("/api/orders/:email/:orderId", async (req, res) => {
+  try {
+    const { email, orderId } = req.params;
+
+    const conn = await mysql2Promise.createConnection(dbConfig);
+
+    const [orderData] = await conn.execute(
+      `
+      SELECT o.id, o.email, o.status, o.amount, o.date,
+             p.first_name, p.last_name, p.phone_number, p.address_line_1, p.address_line_2, 
+             p.city, p.state, p.postal_code, p.country
+      FROM Orders o
+      LEFT JOIN profiles p ON o.email = p.email_address
+      WHERE o.email = ? AND o.id = ?
+      `,
+      [email, orderId]
+    );
+
+    if (orderData.length === 0) {
+      return res.status(404).json({ error: "Order not found" });
+    }
+
+    // Fetch products
+    const [products] = await conn.execute(
+      `SELECT product_id, name, image, price, quantity, subtotal 
+       FROM OrderItems WHERE order_id = ?`,
+      [orderId]
+    );
+
+    await conn.end();
+
+    res.json({ ...orderData[0], products });
+  } catch (err) {
+    console.error("❌ Error fetching single order:", err);
+    res.status(500).json({ error: "Internal Server Error", details: err.message });
+  }
+});
+
 
 // get single order
 app.post("/submit-order", async (req, res) => {
@@ -2291,7 +2100,7 @@ app.get("/customer/api/orders/email/:emailId", async (req, res) => {
         o.orderId as razorpayOrderId,
         o.signature,
         p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country
-      FROM orders o
+      FROM Orders o
       LEFT JOIN profiles p ON o.email = p.email_address
       WHERE o.email = ?
       ORDER BY o.id DESC
