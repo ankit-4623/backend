@@ -12,6 +12,7 @@ const morgan = require("morgan");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
 const axios = require("axios");
+const fs = require("fs");
 
 require("dotenv").config({
    path: '.env'
@@ -945,78 +946,74 @@ app.post("/complete-profile", async (req, res) => {
 
 
 // invoice
- // <-- your PDF generator
+ //PDF generator
 
 app.get("/customer/api/orders/:email/invoice/:orderId", async (req, res) => {
+  const { email, orderId } = req.params;
+
+  const numericOrderId = parseInt(orderId.replace(/^ORD/, ""), 10);
+  if (isNaN(numericOrderId)) {
+    return res.status(400).json({ message: "Invalid orderId format" });
+  }
+
+  let pool;
   try {
-    const { email, orderId } = req.params;
+    pool = mysql2Promise.createPool(banerjeeConfig);
 
-    // Convert "ORD038" -> 38 (numeric)
-    const numericOrderId = parseInt(orderId.replace(/^ORD/, ""), 10);
-
-    if (isNaN(numericOrderId)) {
-      return res.status(400).json({
-        message: "Invalid orderId format. Use ORDxxx or numeric ID",
-      });
-    }
-
-    const conn = await mysql2Promise.createConnection(banerjeeConfig);
-
-    // fetch order + profile info
-    const query = `
+    // Fetch order + profile
+    const [results] = await pool.execute(
+      `
       SELECT 
-          o.order_id AS id, 
-          CONCAT(p.first_name, ' ', p.last_name) AS customer,
-          p.phone_number,
-          o.delivery_date AS date,
-          o.status,
-          o.email_id,
-          p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
-          o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
-          o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
+        o.order_id AS id,
+        CONCAT(p.first_name, ' ', p.last_name) AS customer,
+        p.phone_number,
+        o.delivery_date AS date,
+        o.status,
+        o.email_id,
+        o.amount,
+        p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
+        o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
+        o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
       FROM Orders o
       LEFT JOIN profiles p ON o.email_id = p.email_address
       WHERE o.email_id = ? AND o.order_id = ?
       LIMIT 1
-    `;
-    const [results] = await conn.execute(query, [email, numericOrderId]);
+      `,
+      [email, numericOrderId]
+    );
 
-    if (results.length === 0) {
-      await conn.end();
+    if (!results.length) {
       return res.status(404).json({ message: "Order not found" });
     }
 
     const order = results[0];
 
-    // build product list
-    const productIds = [
-      order.pid_1,
-      order.pid_2,
-      order.pid_3,
-      order.pid_4,
-      order.pid_5,
-      order.pid_6,
-      order.pid_7,
-      order.pid_8,
-      order.pid_9,
-      order.pid_10,
-    ].filter((pid) => pid);
+    // Restrict invoice before delivery
+    if (order.status !== "delivered") {
+      return res.status(403).json({ message: "Invoice only available after delivery" });
+    }
 
-    let total_amount = 0;
-    let products = [];
+    // Collect product IDs
+    const productIds = [
+      order.pid_1, order.pid_2, order.pid_3, order.pid_4, order.pid_5,
+      order.pid_6, order.pid_7, order.pid_8, order.pid_9, order.pid_10
+    ].filter(Boolean);
+
+    const products = [];
 
     for (const pid of productIds) {
-      const [itemId, quantity] = pid.split("-");
-      const [itemRows] = await conn.execute(
-        `SELECT PID, name, price, imglink AS image FROM All_Items WHERE PID = ?`,
+      const parts = pid.split("-");
+      const itemId = parts[0];
+      const qty = parseInt(parts[1], 10) || 1;
+
+      const [itemRows] = await pool.execute(
+        "SELECT PID, name, price, imglink AS image FROM All_Items WHERE PID = ? LIMIT 1",
         [itemId]
       );
+
       if (itemRows.length > 0) {
         const product = itemRows[0];
-        const qty = parseInt(quantity) || 1;
         const price = parseFloat(product.price) || 0;
-
-        total_amount += price * qty;
 
         products.push({
           id: product.PID,
@@ -1029,22 +1026,13 @@ app.get("/customer/api/orders/:email/invoice/:orderId", async (req, res) => {
       }
     }
 
-    await conn.end();
-
-    // Invoice only after delivery
-    if (order.status !== "delivered") {
-      return res.status(403).json({
-        message: "Invoice only available after delivery",
-      });
-    }
-
-    // final invoice object
+    // Prepare invoice object
     const invoiceOrder = {
       id: `ORD${String(order.id).padStart(3, "0")}`,
       customer: order.customer || "Unknown",
       phone: order.phone_number || "",
       date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
-      amount: total_amount.toFixed(2),
+      amount: parseFloat(order.amount || 0).toFixed(2), // Use DB amount
       status: order.status,
       email_id: order.email_id,
       shipping_address: {
@@ -1055,122 +1043,198 @@ app.get("/customer/api/orders/:email/invoice/:orderId", async (req, res) => {
         postal_code: order.postal_code || "",
         country: order.country || "",
       },
-      products: products,
+      products,
     };
 
-    // generate PDF invoice
+  
+
     generateInvoice(invoiceOrder, res);
-  } catch (err) {
-    console.error("Invoice error:", err);
-    res.status(500).json({
-      error: "Internal Server Error",
-      message: "An unexpected error occurred",
-      details: err.message,
-      timestamp: new Date().toISOString(),
-    });
+
+  } catch (error) {
+    console.error("❌ Invoice API error:", error);
+    res.status(500).json({ error: "Internal Server Error", details: error.message });
+  } finally {
+    if (pool) await pool.end();
   }
 });
 
-// pdf formate
 
 function generateInvoice(order, res) {
   const doc = new PDFDocument({ margin: 50 });
 
-  // ✅ Load a font that supports ₹ symbol (NotoSans/DejaVuSans/etc.)
-  const fontPath = path.join(process.cwd(), "fonts", "NotoSans-Regular.ttf");
-  doc.registerFont("NotoSans", fontPath);
-  doc.font("NotoSans");
-
-  const INR = "\u20B9"; // Unicode for ₹ symbol
-
-  res.setHeader(
-    "Content-Disposition",
-    `attachment; filename=invoice-${order.id}.pdf`
-  );
+  // ---------------- RESPONSE HEADERS ----------------
   res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename=invoice-${order.id}.pdf`);
 
+  // ✅ Pipe only once
   doc.pipe(res);
 
-  // --- Company Header ---
+  // ---------------- FONT ----------------
+  try {
+    const fontPath = path.join(process.cwd(), "fonts", "NotoSans-Regular.ttf");
+    if (fs.existsSync(fontPath)) {
+      doc.registerFont("NotoSans", fontPath);
+      doc.font("NotoSans");
+    }
+  } catch (err) {
+    console.error("Font load error:", err.message);
+  }
+
+  const INR = "\u20B9"; // ₹ symbol
+
+  // ---------------- BORDER ----------------
+  const drawBorder = () => {
+    const pageWidth = doc.page.width;
+    const pageHeight = doc.page.height;
+    doc
+      .rect(20, 20, pageWidth - 40, pageHeight - 40)
+      .lineWidth(2)
+      .strokeColor("#1a237e")
+      .stroke();
+  };
+  drawBorder();
+  doc.on("pageAdded", drawBorder);
+
+  // ---------------- HEADER ----------------
+  try {
+    const logoPath = path.join(process.cwd(), "image", "image.png");
+    if (fs.existsSync(logoPath)) {
+      doc.image(logoPath, 40, 35, { width: 70 });
+    }
+  } catch (err) {
+    console.error("Logo load error:", err.message);
+  }
+
+  const headerX = 120, headerY = 35;
+
   doc
-    .fontSize(18)
-    .text("Banerjee Electronics and Consultancy Services", {
-      align: "center",
-      underline: true,
-    });
-  doc.moveDown();
+    .fontSize(14) // smaller heading
+    .fillColor("#1a237e")
+    .text("BANERJEE ELECTRONICS & CONSULTANCY SERVICES (BECS)", headerX, headerY);
 
-  // --- Invoice Header ---
-  doc.fontSize(20).text("Invoice", { align: "center" });
-  doc.moveDown();
+  doc
+    .fontSize(8)
+    .fillColor("#000")
+    .text("ADDRESS: 70/5 BANERJEE PARA ROAD, KAMALA PARK,", headerX, headerY + 15)
+    .text("SARSUNA, KOLKATA - 700061", headerX, headerY + 25)
+    .text("CONTACT NO: 9830640683", headerX, headerY + 35)
+    .text("GSTIN: 19BKNPB0402R1ZZ", headerX, headerY + 45)
+    .text("2ND FLOOR", headerX, headerY + 55);
 
-  // --- Order info ---
-  doc.fontSize(12).text(`Invoice ID: ${order.id}`);
+  // Divider
+  doc.moveDown(2);
+  doc
+    .moveTo(40, doc.y)
+    .lineTo(doc.page.width - 40, doc.y)
+    .strokeColor("#9e9e9e")
+    .lineWidth(1)
+    .stroke();
+
+  // ---------------- INVOICE TITLE ----------------
+  doc
+    .moveDown(1)
+    .fontSize(12)
+    .fillColor("#000")
+    .text("Invoice", { align: "center" });
+
+  // ---------------- ORDER INFO ----------------
+  doc.fontSize(10).text(`Invoice ID: ${order.id}`);
   doc.text(`Date: ${order.date || new Date().toLocaleDateString()}`);
   doc.text(`Status: ${order.status}`);
   doc.moveDown();
 
-  // --- Customer details ---
-  doc.fontSize(14).text("Customer Details:", { underline: true });
-  doc
-    .fontSize(12)
-    .text(`Name: ${order.customer}`)
-    .text(`Email: ${order.email_id}`)
-    .text(`Phone: ${order.phone || ""}`);
+  // ---------------- CUSTOMER DETAILS ----------------
+  doc.fontSize(12).fillColor("#1a237e").text("Customer Details:", { underline: true });
+  doc.fillColor("#000").fontSize(10);
+  doc.text(`Name: ${order.customer}`);
+  doc.text(`Email: ${order.email_id}`);
+  doc.text(`Phone: ${order.phone || ""}`);
   doc.moveDown();
 
-  // --- Shipping address ---
-  doc.fontSize(14).text("Shipping Address:", { underline: true });
+  // ---------------- SHIPPING ----------------
+  doc.fontSize(12).fillColor("#1a237e").text("Shipping Address:", { underline: true });
   const addr = order.shipping_address || {};
-  doc
-    .fontSize(12)
-    .text(addr.address_line1 || "")
-    .text(addr.address_line2 || "")
-    .text(`${addr.city || ""}, ${addr.state || ""}`)
-    .text(`${addr.postal_code || ""}, ${addr.country || ""}`);
+  doc.fillColor("#000").fontSize(10);
+  doc.text(addr.address_line1 || "");
+  doc.text(addr.address_line2 || "");
+  doc.text(`${addr.city || ""}, ${addr.state || ""}`);
+  doc.text(`${addr.postal_code || ""}, ${addr.country || ""}`);
   doc.moveDown();
 
-  // --- Products Table ---
-  doc.fontSize(14).text("Products:", { underline: true });
+  // ---------------- PRODUCTS TABLE ----------------
+  doc.fontSize(12).fillColor("#1a237e").text("Products:", { underline: true });
   doc.moveDown(0.5);
 
   const tableTop = doc.y;
-  const itemX = 50;
-  const qtyX = 300;
-  const priceX = 370;
-  const subtotalX = 450;
+  const itemX = 50, qtyX = 300, priceX = 370, subtotalX = 450;
 
-  doc.fontSize(12).text("Item", itemX, tableTop);
+  // Header row
+  doc.rect(50, tableTop - 5, 500, 20).fill("#eeeeee").stroke();
+  doc.fillColor("#000").fontSize(10);
+  doc.text("Item", itemX, tableTop);
   doc.text("Qty", qtyX, tableTop);
   doc.text("Price", priceX, tableTop);
   doc.text("Subtotal", subtotalX, tableTop);
 
-  doc.moveDown();
+  let productTotal = 0;
 
   order.products.forEach((product, i) => {
     const y = tableTop + 25 + i * 20;
-    doc.fontSize(12).text(product.name, itemX, y, { width: 240 });
-    doc.text(product.quantity.toString(), qtyX, y);
-    doc.text(`${INR}${product.price}`, priceX, y);
-    doc.text(`${INR}${product.subtotal}`, subtotalX, y);
+
+    if (i % 2 === 0) {
+      doc.rect(50, y - 5, 500, 20).fill("#f9f9f9").stroke();
+    }
+
+    const price = parseFloat(product.price) || 0;
+    const quantity = parseFloat(product.quantity) || 1;
+    const subtotal = parseFloat(product.subtotal) || (price * quantity);
+
+    doc.fillColor("#000").fontSize(10);
+    doc.text(product.name, itemX, y, { width: 240 });
+    doc.text(quantity.toString(), qtyX, y);
+    doc.text(`${INR}${price.toFixed(2)}`, priceX, y);
+    doc.text(`${INR}${subtotal.toFixed(2)}`, subtotalX, y);
+
+    productTotal += subtotal;
   });
 
   doc.moveDown(2);
 
-  // --- Total ---
-  doc.fontSize(14).text(`Grand Total: ${INR}${order.amount}`, {
-    align: "right",
-  });
+  // ---------------- CALCULATIONS ----------------
+  const gst = parseFloat((productTotal * 0.18).toFixed(2));
+  const grandTotal = parseFloat(order.amount) || (productTotal + gst);
+  const delivery = parseFloat((grandTotal - (productTotal + gst)).toFixed(2));
+
+  doc.fontSize(10).fillColor("#000");
+  doc.text(`Products Total: ${INR}${productTotal.toFixed(2)}`, { align: "right" });
+  doc.text(`GST (18%): ${INR}${gst.toFixed(2)}`, { align: "right" });
+  doc.text(`Delivery Charges: ${INR}${delivery.toFixed(2)}`, { align: "right" });
+
+  // ---------------- GRAND TOTAL ----------------
+  doc.moveDown(0.5);
+  doc.fontSize(14).fillColor("#1a237e").text(
+    `Grand Total: ${INR}${grandTotal.toFixed(2)}`,
+    { align: "right", underline: true }
+  );
+
   doc.moveDown(2);
 
-  // --- Footer ---
-  doc.fontSize(12).text("Thank you for your purchase!", {
-    align: "center",
-  });
+  // ---------------- FOOTER ----------------
+  doc
+    .moveTo(40, doc.y)
+    .lineTo(doc.page.width - 40, doc.y)
+    .strokeColor("#9e9e9e")
+    .stroke();
 
+  doc.fontSize(9).fillColor("#616161").text(
+    "Banerjee Electronics and Consultancy Services | www.banerjeeconsultancy.com",
+    { align: "center" }
+  );
+  doc.text("Thank you for shopping with us!", { align: "center" });
+
+  // ✅ Finalize PDF once
   doc.end();
 }
-
 
 // Shop Product Routes (Banerjee DB)
 app.get("/api/stock", async (req, res) => {
