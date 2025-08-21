@@ -12,9 +12,7 @@ const morgan = require("morgan");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
 const axios = require("axios");
-// require("dotenv").config({
-//   path:'.env'
-// });
+
 require("dotenv").config({
    path: '.env'
 });
@@ -1416,85 +1414,63 @@ app.post("/verify-payment", (req, res) => {
 
 app.post("/submit-order", async (req, res) => {
   const { email, cart, paymentId, orderId, signature, totalAmount } = req.body;
-  if (
-    !email ||
-    !cart ||
-    !Array.isArray(cart) ||
-    !paymentId ||
-    !orderId ||
-    !signature ||
-    !totalAmount
-  ) {
-    console.warn(
-      `[${new Date().toISOString()}] ❌ Missing required fields in /submit-order request`
-    );
+  
+  // Quick validation
+  if (!email || !Array.isArray(cart) || !paymentId || !orderId || !signature || !totalAmount) {
     return res.status(400).json({
       status: "error",
-      message:
-        "Email, cart, paymentId, orderId, signature, and totalAmount are required",
-      timestamp: new Date().toISOString(),
+      message: "All fields are required"
     });
   }
+
+  const conn = await mysql2Promise.createConnection(banerjeeConfig);
+  
   try {
-    const conn = await mysql2Promise.createConnection(banerjeeConfig);
+    // Verify email exists
     const [profileRows] = await conn.execute(
-      `SELECT email_address FROM profiles WHERE email_address = ?`,
+      "SELECT email_address FROM profiles WHERE email_address = ?",
       [email]
     );
+    
     if (profileRows.length === 0) {
-      await conn.end();
-      console.warn(`[${new Date().toISOString()}] ❌ Invalid email: ${email}`);
       return res.status(400).json({
         status: "error",
-        message: "Invalid email: No matching profile found",
-        timestamp: new Date().toISOString(),
+        message: "Invalid email"
       });
     }
+
+    // Verify payment signature
     const generatedSignature = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
       .update(`${orderId}|${paymentId}`)
       .digest("hex");
+
     if (generatedSignature !== signature) {
-      await conn.end();
-      console.warn(
-        `[${new Date().toISOString()}] ❌ Payment verification failed for order: ${orderId}`
-      );
       return res.status(400).json({
         status: "error",
-        message: "Invalid payment signature",
-        timestamp: new Date().toISOString(),
+        message: "Invalid payment signature"
       });
     }
-    const pidFields = Array.from({ length: 10 }, (_, i) => `pid_${i + 1}`).join(
-      ", "
-    );
-    const pidValues = Array(10).fill(null);
-    cart.slice(0, 10).forEach((item, index) => {
-      pidValues[index] = `${item.id}-${item.quantity}`;
-    });
-    const placeholders = pidValues.map(() => "?").join(", ");
+
+    // Insert order with amount
     const [orderResult] = await conn.execute(
-      `INSERT INTO Orders (email_id, ${pidFields}, status) VALUES (?, ${placeholders}, 'pending')`,
-      [email, ...pidValues]
+      "INSERT INTO Orders (email_id, amount, status) VALUES (?, ?, 'completed')",
+      [email, totalAmount]
     );
-    await conn.end();
+
     res.json({
       status: "success",
       orderId: `ORD${String(orderResult.insertId).padStart(3, "0")}`,
-      paymentId,
-      timestamp: new Date().toISOString(),
+      paymentId
     });
-  } catch (err) {
-    console.error(
-      `[${new Date().toISOString()}] ❌ Error submitting order:`,
-      err
-    );
+
+  } catch (error) {
     res.status(500).json({
       status: "error",
-      message: "Order submission failed",
-      details: err.message,
-      timestamp: new Date().toISOString(),
+      message: "Order submission failed"
     });
+  } finally {
+    await conn.end();
   }
 });
 
@@ -2403,6 +2379,7 @@ app.get("/customer/api/orders/email/:emailId", async (req, res) => {
 // query
 
 // get query
+
 app.get("/admin/enquiries", async (req, res) => {
   try {
     const conn = await mysql2Promise.createConnection(banerjeeConfig);
