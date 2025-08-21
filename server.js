@@ -385,65 +385,68 @@ app.get("/api/proxy-pdf", async (req, res) => {
 // Shop Authentication Routes (Banerjee DB)
 app.post("/signup", async (req, res) => {
   const { name, email, password } = req.body;
+  
   if (!name || !email || !password) {
-    return res
-      .status(400)
-      .json({ error: "Name, email, and password are required." });
+    return res.status(400).json({ error: "Name, email, and password are required" });
   }
+
   const { firstName, lastName } = splitName(name);
+
   try {
-    const connection = await mysql2Promise.createConnection(banerjeeConfig);
-    const query = `
-            INSERT INTO profiles
-            (first_name, last_name, email_address, phone_number, password, address_line_1, address_line_2, city, state, postal_code, country, bio)
-            VALUES (?, ?, ?, '', ?, '', '', '', '', '', '', '')
-        `;
-    await connection.execute(query, [firstName, lastName, email, password]);
-    await connection.end();
-    res.json({ message: "User signed up successfully." });
+    const pool = mysql2Promise.createPool(banerjeeConfig);
+    
+    // Check if email already exists
+    const [existing] = await pool.execute(
+      "SELECT email_address FROM profiles WHERE email_address = ? LIMIT 1",
+      [email]
+    );
+
+    if (existing.length > 0) {
+      return res.status(400).json({ error: "Email already exists" });
+    }
+
+    // Insert new user
+    await pool.execute(
+      "INSERT INTO profiles (first_name, last_name, email_address, password) VALUES (?, ?, ?, ?)",
+      [firstName, lastName, email, password]
+    );
+
+    res.json({ message: "User signed up successfully" });
+
   } catch (error) {
-    console.error(error);
     res.status(500).json({ error: "Database error" });
   }
 });
 // login
 app.post("/login", async (req, res) => {
   const { email, password } = req.body;
+  
   if (!email || !password) {
-    // console.log('❌ Missing email or password');
-    return res.status(400).json({
-      status: "error",
-      message: "Email and Password are required.",
-    });
+    return res.status(400).json({ status: "error" });
   }
+
   try {
-    const connection = await mysql2Promise.createConnection(banerjeeConfig);
-    const [rows] = await connection.execute(
-      "SELECT first_name, last_name, password FROM profiles WHERE email_address = ?",
+    const pool = mysql2Promise.createPool(banerjeeConfig);
+    
+    const [rows] = await pool.execute(
+      "SELECT first_name, last_name, password FROM profiles WHERE email_address = ? LIMIT 1",
       [email]
     );
-    await connection.end();
-    if (rows.length === 0) {
-      // console.log('⚠️ Email not found');
-      return res.status(200).json({ status: "not_found" });
-    }
+
+    if (!rows.length) return res.json({ status: "not_found" });
+    
     const user = rows[0];
-    if (user.password !== password) {
-      // console.log('❌ Incorrect password');
-      return res.status(200).json({ status: "wrong_password" });
-    }
-    return res.status(200).json({
+    if (user.password !== password) return res.json({ status: "wrong_password" });
+
+    res.json({
       status: "success",
       email,
       firstName: user.first_name,
-      lastName: user.last_name,
+      lastName: user.last_name
     });
-  } catch (err) {
-    console.error("💥 Error during login:", err);
-    return res.status(500).json({
-      status: "error",
-      message: "Server error.",
-    });
+
+  } catch (error) {
+    res.status(500).json({ status: "error" });
   }
 });
 // forgot password
@@ -460,7 +463,7 @@ app.post('/reset-password/sendOtp', async (req, res) => {
   try {
     const { email } = req.body;
 
-    // 🔹 Validate input
+ 
     if (!email) {
       return res.status(400).json({ error: "Email is required" });
     }
@@ -1499,7 +1502,8 @@ app.post("/submit-order", async (req, res) => {
 
 const pool = mysql2Promise.createPool(banerjeeConfig);
 
- app.get("/api/orders", async (req, res) => {
+ // get all orders by admin
+app.get("/api/orders", async (req, res) => {
   let conn;
   try {
     // Pagination parameters
@@ -1548,6 +1552,7 @@ const pool = mysql2Promise.createPool(banerjeeConfig);
         o.delivery_date AS date,
         o.status,
         o.email_id,
+        o.amount, 
         p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
         o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
         o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
@@ -1660,7 +1665,7 @@ const pool = mysql2Promise.createPool(banerjeeConfig);
         id: `ORD${String(order.id).padStart(3, "0")}`,
         customer: order.customer || "Unknown",
         date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
-        amount: total_amount.toFixed(2),
+       amount: order.amount ? parseFloat(order.amount).toFixed(2) : "0.00",
         status: order.status || "Pending",
         source: inferSource(),
         email_id: order.email_id || "Unknown",
@@ -1745,6 +1750,7 @@ app.get("/customer/api/orders/:orderId", async (req, res) => {
         o.delivery_date AS date,
         o.status,
         o.email_id,
+        o.amount, 
         p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
         o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
         o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
@@ -1780,7 +1786,7 @@ app.get("/customer/api/orders/:orderId", async (req, res) => {
           customer: order.customer && order.customer.trim() !== " " ? order.customer.trim() : "Unknown",
           phone: order.phone_number || "",
           date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
-          amount: "0.00",
+          amount: order.amount ? parseFloat(order.amount).toFixed(2) : "0.00",
           status: order.status || "Pending",
           email_id: order.email_id || "",
           customer_details: {
@@ -1883,7 +1889,7 @@ app.get("/customer/api/orders/:orderId", async (req, res) => {
       customer: order.customer && order.customer.trim() !== " " ? order.customer.trim() : "Unknown",
       phone: order.phone_number || "",
       date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
-      amount: total_amount.toFixed(2),
+      amount: order.amount ? parseFloat(order.amount).toFixed(2) : "0.00",
       status: order.status || "Pending",
       email_id: order.email_id || "",
       customer_details: {
@@ -1994,6 +2000,7 @@ app.get("/customer/api/orders/email/:emailId", async (req, res) => {
         o.delivery_date AS date,
         o.status,
         o.email_id,
+        o.amount, 
         p.address_line_1, p.address_line_2, p.city, p.state, p.postal_code, p.country,
         o.pid_1, o.pid_2, o.pid_3, o.pid_4, o.pid_5,
         o.pid_6, o.pid_7, o.pid_8, o.pid_9, o.pid_10
@@ -2098,7 +2105,7 @@ app.get("/customer/api/orders/email/:emailId", async (req, res) => {
         customer: order.customer && order.customer.trim() !== " " ? order.customer.trim() : "Unknown",
         phone: order.phone_number || "",
         date: order.date ? new Date(order.date).toISOString().split("T")[0] : "",
-        amount: total_amount.toFixed(2),
+        amount: order.amount ? parseFloat(order.amount).toFixed(2) : "0.00",
         status: order.status || "Pending",
         email_id: order.email_id || "",
         customer_details: {
