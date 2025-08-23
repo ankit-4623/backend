@@ -1534,6 +1534,11 @@ app.post("/verify-payment", (req, res) => {
 
 const pool = mysql2Promise.createPool(banerjeeConfig);
 
+// stay on backend
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "ok", timestamp: new Date() });
+});
+
  // get all orders by admin
 app.get("/api/orders", async (req, res) => {
   try {
