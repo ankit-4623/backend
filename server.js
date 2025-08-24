@@ -40,7 +40,7 @@ app.use(
       "http://127.0.0.1:3000",
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization","Cache-Control"],
     credentials: true,
   })
 );
