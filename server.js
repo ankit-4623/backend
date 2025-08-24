@@ -2826,18 +2826,8 @@ app.post("/api/user/:uid/purchase-course", async (req, res, next) => {
 
 app.get("/api/courses/:courseId/lectures", async (req, res, next) => {
   const { courseId } = req.params;
-  const uid = req.user?.uid;
 
   const numericCourseId = parseInt(courseId, 10);
-  if (!uid) {
-    return res
-      .status(401)
-      .json({
-        status: "error",
-        message: "Unauthorized",
-        timestamp: new Date().toISOString(),
-      });
-  }
 
   if (isNaN(numericCourseId) || numericCourseId <= 0) {
     return res
