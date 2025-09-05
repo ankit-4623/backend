@@ -36,6 +36,8 @@ app.use(
     origin: [
       "https://banerjeeelectronicsconsultancyservices.com",
       "https://www.banerjeeelectronicsconsultancyservices.com",
+       "https://becsofficial.com",
+      "https://www.becsofficial.com",
       "http://localhost:3000",
       "http://127.0.0.1:3000",
     ],
