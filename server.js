@@ -396,7 +396,7 @@ app.post("/signup", async (req, res) => {
 
   const { firstName, lastName } = splitName(name);
 
-  const hashedPassword = bcrypt.hash(password,10)
+  const hashedPassword = await bcrypt.hash(password, 10);
 
   try {
     const pool = mysql2Promise.createPool(banerjeeConfig);
@@ -431,6 +431,7 @@ app.post("/login", async (req, res) => {
     return res.status(400).json({ status: "error" });
   }
 
+  
   try {
     const pool = mysql2Promise.createPool(banerjeeConfig);
     
@@ -438,11 +439,12 @@ app.post("/login", async (req, res) => {
       "SELECT first_name, last_name, password FROM profiles WHERE email_address = ? LIMIT 1",
       [email]
     );
-
+    
     if (!rows.length) return res.json({ status: "not_found" });
     
     const user = rows[0];
-    if (user.password !== password) return res.json({ status: "wrong_password" });
+    const originalPassword = await bcrypt.compare(password, user.password);
+    if (!originalPassword) return res.json({ status: "wrong_password" });
 
     res.json({
       status: "success",
@@ -1723,7 +1725,7 @@ app.post("/submit-order", async (req, res) => {
 
     // Log order summary
     const orderSummary = cart.map(item => `${item.id}(qty:${item.quantity})`).join(', ');
-    console.log(`[${new Date().toISOString()}] ✅ Order created: ORD${String(orderResult.insertId).padStart(3, "0")} - Items: ${orderSummary}`);
+    // console.log(`[${new Date().toISOString()}] ✅ Order created: ORD${String(orderResult.insertId).padStart(3, "0")} - Items: ${orderSummary}`);
 
     res.json({
       status: "success",
