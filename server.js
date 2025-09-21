@@ -13,6 +13,7 @@ const Razorpay = require("razorpay");
 const crypto = require("crypto");
 const axios = require("axios");
 const fs = require("fs");
+const bcrypt = require('bcrypt')
 
 require("dotenv").config({
    path: '.env'
@@ -395,6 +396,8 @@ app.post("/signup", async (req, res) => {
 
   const { firstName, lastName } = splitName(name);
 
+  const hashedPassword = bcrypt.hash(password,10)
+
   try {
     const pool = mysql2Promise.createPool(banerjeeConfig);
     
@@ -411,7 +414,7 @@ app.post("/signup", async (req, res) => {
     // Insert new user
     await pool.execute(
       "INSERT INTO profiles (first_name, last_name, email_address, password) VALUES (?, ?, ?, ?)",
-      [firstName, lastName, email, password]
+      [firstName, lastName, email, hashedPassword]
     );
 
     res.json({ message: "User signed up successfully" });
