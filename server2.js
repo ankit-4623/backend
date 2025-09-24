@@ -106,6 +106,8 @@ function splitName(fullName) {
   }
 }
 
+
+
 async function getNextPID(connection, targetTable, prefix) {
   const [targetRows] = await connection.execute(
     `SELECT PID FROM ${targetTable} WHERE PID LIKE ? ORDER BY PID DESC LIMIT 1`,
@@ -735,6 +737,11 @@ app.post("/admin-logout", (req, res) => {
       message: "Admin logged out successfully"
     });
   }
+});
+
+// Protected admin panel route
+app.get("/admin-panel", adminAuthenticate, (req, res) => {
+  res.sendFile(path.join(__dirname, "private", "admin pannel.html"));
 });
 // forgot password
 // transporter
